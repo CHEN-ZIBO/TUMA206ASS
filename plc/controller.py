@@ -58,6 +58,8 @@ class PLCController:
 
     # Track previous state to detect FAULT→IDLE transition for fast recovery
     _prev_state: str = field(default=config.PLC_IDLE, repr=False)
+    # Track previous manual overrides to detect manual→auto transitions
+    _prev_manuals: set = field(default_factory=set, repr=False)
 
     def reset(self) -> None:
         self.state = config.PLC_IDLE
@@ -75,6 +77,7 @@ class PLCController:
         self._prev_temp = -999.0
         self._warmed_up = False
         self._prev_state = config.PLC_IDLE
+        self._prev_manuals = set()
 
     # ------------------------------------------------------------------
     def step(self, sensors: Dict,
@@ -171,6 +174,15 @@ class PLCController:
         tank_level = float(sensors.get("tank_level", 50.0))
         pasteur_temp = float(sensors.get("pasteur_temp", 25.0))
         cooler_temp = float(sensors.get("cooler_temp", 25.0))
+
+        # Track manual→auto transitions: reset related debounce counters
+        # so auto has time to recover before faults re-trigger.
+        released = self._prev_manuals - set(man.keys())
+        if "heater_power_cmd" in released:
+            self._temp_range_count = 0  # give auto time to bring temp back
+        if "pump_cmd" in released:
+            self._no_flow_count = 0     # give auto time to restore flow
+        self._prev_manuals = set(man.keys())
         bottle_present = int(sensors.get("bottle_present", 0))
 
         man_inlet  = "inlet_valve_cmd" in man

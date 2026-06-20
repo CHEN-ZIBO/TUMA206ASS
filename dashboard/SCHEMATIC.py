@@ -282,35 +282,62 @@ with st.sidebar:
     st.divider()
     st.markdown('<div class="sidebar-section">Manual Override</div>', unsafe_allow_html=True)
 
+    live = engine.latest()  # snapshot current engine state for slider init
+
     man_inlet = st.checkbox("Inlet Valve", key="cb_inlet")
     if man_inlet:
-        v = st.slider("Open %", 0, 100, int(st.session_state.get("val_inlet_valve_cmd", 0)), key="sl_inlet", label_visibility="collapsed")
+        if not st.session_state.get("_init_inlet", False):
+            st.session_state["val_inlet_valve_cmd"] = float(live.get("inlet_valve_cmd", 50))
+            st.session_state["_init_inlet"] = True
+        v = st.slider("Open %", 0, 100, int(st.session_state.get("val_inlet_valve_cmd", 50)), key="sl_inlet", label_visibility="collapsed")
         apply_manual("inlet_valve_cmd", True, float(v))
-    else: apply_manual("inlet_valve_cmd", False, 0.0)
+    else:
+        st.session_state["_init_inlet"] = False
+        apply_manual("inlet_valve_cmd", False, 0.0)
 
     man_pump = st.checkbox("Feed Pump", key="cb_pump")
     if man_pump:
-        v = st.slider("Speed %", 0, 100, int(st.session_state.get("val_pump_cmd", 0)), key="sl_pump", label_visibility="collapsed")
+        if not st.session_state.get("_init_pump", False):
+            st.session_state["val_pump_cmd"] = float(live.get("pump_cmd", 50))
+            st.session_state["_init_pump"] = True
+        v = st.slider("Speed %", 0, 100, int(st.session_state.get("val_pump_cmd", 50)), key="sl_pump", label_visibility="collapsed")
         apply_manual("pump_cmd", True, float(v))
-    else: apply_manual("pump_cmd", False, 0.0)
+    else:
+        st.session_state["_init_pump"] = False
+        apply_manual("pump_cmd", False, 0.0)
 
     man_heater = st.checkbox("Heater", key="cb_heater")
     if man_heater:
-        v = st.slider("Power %", 0, 100, int(st.session_state.get("val_heater_power_cmd", 0)), 5, key="sl_heater", label_visibility="collapsed")
+        if not st.session_state.get("_init_heater", False):
+            st.session_state["val_heater_power_cmd"] = float(live.get("heater_power_cmd", 50))
+            st.session_state["_init_heater"] = True
+        v = st.slider("Power %", 0, 100, int(st.session_state.get("val_heater_power_cmd", 50)), 5, key="sl_heater", label_visibility="collapsed")
         apply_manual("heater_power_cmd", True, float(v))
-    else: apply_manual("heater_power_cmd", False, 0.0)
+    else:
+        st.session_state["_init_heater"] = False
+        apply_manual("heater_power_cmd", False, 0.0)
 
     man_cool = st.checkbox("Cooling Valve", key="cb_cool")
     if man_cool:
-        v = st.slider("Open %", 0, 100, int(st.session_state.get("val_cooling_valve_cmd", 0)), key="sl_cool", label_visibility="collapsed")
+        if not st.session_state.get("_init_cool", False):
+            st.session_state["val_cooling_valve_cmd"] = float(live.get("cooling_valve_cmd", 30))
+            st.session_state["_init_cool"] = True
+        v = st.slider("Open %", 0, 100, int(st.session_state.get("val_cooling_valve_cmd", 30)), key="sl_cool", label_visibility="collapsed")
         apply_manual("cooling_valve_cmd", True, float(v))
-    else: apply_manual("cooling_valve_cmd", False, 0.0)
+    else:
+        st.session_state["_init_cool"] = False
+        apply_manual("cooling_valve_cmd", False, 0.0)
 
     man_conv = st.checkbox("Conveyor", key="cb_conv")
     if man_conv:
-        v = st.slider("Speed %", 0, 100, int(st.session_state.get("val_conveyor_cmd", 0)), key="sl_conv", label_visibility="collapsed")
+        if not st.session_state.get("_init_conv", False):
+            st.session_state["val_conveyor_cmd"] = float(live.get("conveyor_cmd", 50))
+            st.session_state["_init_conv"] = True
+        v = st.slider("Speed %", 0, 100, int(st.session_state.get("val_conveyor_cmd", 50)), key="sl_conv", label_visibility="collapsed")
         apply_manual("conveyor_cmd", True, float(v))
-    else: apply_manual("conveyor_cmd", False, 0.0)
+    else:
+        st.session_state["_init_conv"] = False
+        apply_manual("conveyor_cmd", False, 0.0)
 
     st.divider()
     st.markdown('<div class="sidebar-section">Fault Injection</div>', unsafe_allow_html=True)

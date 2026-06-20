@@ -12,62 +12,59 @@ from plotly.subplots import make_subplots
 import config
 from engine import SimulationEngine
 
-# ══════════════════════════════════════════════════════════════════════
-# GLOBAL CSS
-# ══════════════════════════════════════════════════════════════════════
-st.markdown("""
+BG = "#0d1117"
+CARD_BG = "#161b22"
+BORDER = "#30363d"
+TEXT = "#c9d1d9"
+TEXT_DIM = "#8b949e"
+ACCENT = "#58a6ff"
+
+st.markdown(f"""
 <style>
-    .stApp { background: #f5f3ef; }
-    header[data-testid="stHeader"] {
-        background: linear-gradient(90deg, #1a1f2e 0%, #252b3d 50%, #1a1f2e 100%);
-        border-bottom: 2px solid #c49860;
-    }
-    header[data-testid="stHeader"] * { color: #e8e0d5 !important; }
-    [data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1f2e 0%, #141822 100%);
-        border-right: 1px solid #2a3040;
-    }
-    [data-testid="stSidebar"] * { color: #c8c0b4 !important; }
-    [data-testid="stSidebar"] .stButton > button {
-        background: #c49860 !important; color: #1a1f2e !important;
-        border: none !important; border-radius: 4px !important;
-        font-weight: 600 !important; letter-spacing: 0.04em !important;
-        text-transform: uppercase !important; font-size: 0.78rem !important;
-        transition: all 0.12s ease !important; cursor: pointer !important;
-    }
-    [data-testid="stSidebar"] .stButton > button:hover {
-        background: #d4a870 !important; transform: translateY(-1px);
-        box-shadow: 0 2px 8px rgba(196,152,96,0.4) !important;
-    }
-    [data-testid="stSidebar"] .stButton > button:active {
-        background: #8b5e30 !important; color: #fff !important;
-        transform: scale(0.96) !important;
-        box-shadow: 0 1px 3px rgba(0,0,0,0.3) inset !important;
-    }
-    [data-testid="stSidebar"] .stButton > button:focus {
-        animation: btn-flash 0.6s ease-out;
-    }
-    @keyframes btn-flash {
-        0% { box-shadow: 0 0 0 0 rgba(196,152,96,0.7); }
-        70% { box-shadow: 0 0 0 12px rgba(196,152,96,0); }
-        100% { box-shadow: 0 0 0 0 rgba(196,152,96,0); }
-    }
-    [data-testid="stSidebar"] hr { border-color: #2a3040 !important; }
-    .section-label {
-        font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.1em; color: #8b7355; margin: 16px 0 4px 0;
-        border-bottom: 2px solid #c49860; padding-bottom: 4px;
-    }
-    .sidebar-section {
-        font-size: 0.58rem; font-weight: 700; text-transform: uppercase;
-        letter-spacing: 0.12em; color: #c49860; margin-top: 12px; margin-bottom: 4px;
-    }
+    .stApp {{ background: {BG}; }}
+    header[data-testid="stHeader"] {{
+        background: linear-gradient(90deg, {BG}, {CARD_BG}, {BG});
+        border-bottom: 1px solid {BORDER};
+    }}
+    header[data-testid="stHeader"] * {{ color: {TEXT} !important; }}
+    [data-testid="stSidebar"] {{
+        background: linear-gradient(180deg, {BG}, #010409);
+        border-right: 1px solid {BORDER};
+    }}
+    [data-testid="stSidebar"] * {{ color: {TEXT_DIM} !important; }}
+    [data-testid="stSidebar"] .stButton > button {{
+        background: #21262d !important; color: {TEXT} !important;
+        border: 1px solid {BORDER} !important; border-radius: 6px !important;
+        font-weight: 600 !important; letter-spacing: 0.03em !important;
+        text-transform: uppercase !important; font-size: 0.75rem !important;
+        transition: all 0.15s !important;
+    }}
+    [data-testid="stSidebar"] .stButton > button:hover {{
+        background: #30363d !important; border-color: {ACCENT} !important;
+    }}
+    [data-testid="stSidebar"] hr {{ border-color: {BORDER} !important; }}
+    .sidebar-section {{
+        font-size: 0.55rem; font-weight: 700; text-transform: uppercase;
+        letter-spacing: 0.1em; color: {ACCENT}; margin-top: 10px; margin-bottom: 4px;
+    }}
+    .section-label {{
+        font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+        letter-spacing: 0.1em; color: {TEXT_DIM};
+        margin: 14px 0 8px 0; padding-bottom: 6px;
+        border-bottom: 1px solid {BORDER};
+    }}
+    .freeze-btn {{
+        display: inline-block; padding: 2px 12px; border-radius: 4px;
+        font-size: 0.62rem; font-weight: 600; cursor: pointer; border: 1px solid {BORDER};
+        background: #21262d; color: {TEXT_DIM}; margin-left: 8px;
+        transition: all 0.2s;
+    }}
+    .freeze-btn.active {{
+        background: {ACCENT}22; color: {ACCENT}; border-color: {ACCENT};
+    }}
 </style>
 """, unsafe_allow_html=True)
 
-# ══════════════════════════════════════════════════════════════════════
-# ENGINE
-# ══════════════════════════════════════════════════════════════════════
 @st.cache_resource
 def get_engine() -> SimulationEngine:
     e = SimulationEngine(use_mqtt=os.environ.get("USE_MQTT", "0") == "1")
@@ -76,137 +73,145 @@ def get_engine() -> SimulationEngine:
 
 engine = get_engine()
 
-if "refresh_s" not in st.session_state:
-    st.session_state["refresh_s"] = 3
-if "window_s" not in st.session_state:
-    st.session_state["window_s"] = config.HISTORY_WINDOW_S
+if "refresh_s" not in st.session_state: st.session_state["refresh_s"] = 3
+if "window_s" not in st.session_state: st.session_state["window_s"] = config.HISTORY_WINDOW_S
+for k in ("freeze_sensors", "freeze_actuators"):
+    if k not in st.session_state: st.session_state[k] = False
 
-# ══════════════════════════════════════════════════════════════════════
-# SIDEBAR
-# ══════════════════════════════════════════════════════════════════════
 with st.sidebar:
-    st.markdown("""
-    <div style="text-align:center;padding:8px 0;">
-        <div style="font-size:1.05rem;font-weight:800;color:#e8dcc8;letter-spacing:0.06em;">TRENDS</div>
-        <div style="font-size:0.55rem;color:#c49860;letter-spacing:0.1em;">REAL-TIME DATA</div>
-    </div>""", unsafe_allow_html=True)
+    st.markdown(f"""<div style="text-align:center;padding:8px 0;">
+        <div style="font-size:1rem;font-weight:700;color:{TEXT};letter-spacing:0.06em;">TRENDS</div>
+        <div style="font-size:0.52rem;color:{ACCENT};letter-spacing:0.1em;">REAL-TIME DATA</div></div>""", unsafe_allow_html=True)
     st.divider()
-
-    st.markdown('<div class="sidebar-section">Chart Settings</div>', unsafe_allow_html=True)
-    st.session_state["window_s"] = st.slider("Time Window (s)", 30, 600, st.session_state["window_s"], 30)
+    st.markdown('<div class="sidebar-section">Settings</div>', unsafe_allow_html=True)
+    st.session_state["window_s"] = st.slider("Window (s)", 30, 600, st.session_state["window_s"], 30)
     st.session_state["refresh_s"] = st.slider("Refresh (s)", 1, 10, st.session_state["refresh_s"])
     st.divider()
-
     if st.button("Export CSV", use_container_width=True):
         path = engine.historian.export_csv()
-        st.toast(f"Data exported", icon="📥")
-        st.success(f"Exported to {path}")
-
+        st.toast("Exported", icon=":material/download:")
     st.divider()
     st.caption("Historian: SQLite")
 
-# ══════════════════════════════════════════════════════════════════════
-# MAIN — TRENDS PAGE
-# ══════════════════════════════════════════════════════════════════════
-st.markdown("""
-<div style="background:linear-gradient(90deg,#1a1f2e,#252b3d,#1a1f2e);border-radius:8px;
-padding:12px 24px;margin-bottom:8px;border-bottom:2px solid #c49860;">
-<div style="font-size:1.15rem;font-weight:800;color:#e8dcc8;letter-spacing:0.08em;">TRENDS</div>
-<div style="font-size:0.62rem;color:#8b8070;letter-spacing:0.06em;">LIVE SENSOR DATA · HISTORICAL COMPARISON · ANOMALY MARKERS</div>
-</div>""", unsafe_allow_html=True)
+st.markdown(f"""<div style="background:linear-gradient(90deg,{BG},{CARD_BG},{BG});border-radius:8px;
+padding:10px 22px;margin-bottom:6px;border-bottom:1px solid {BORDER};">
+<div style="font-size:1.1rem;font-weight:700;color:{TEXT};letter-spacing:0.06em;">TRENDS</div>
+<div style="font-size:0.58rem;color:{TEXT_DIM};">LIVE SENSOR DATA &bull; ACTUATOR COMMANDS &bull; ANOMALY MARKERS</div></div>""", unsafe_allow_html=True)
+
+_LAYOUT = dict(plot_bgcolor=CARD_BG, paper_bgcolor=BG, font=dict(color=TEXT, size=10),
+               uirevision="constant", margin=dict(t=40, b=15, l=45, r=15))
+_AXIS = dict(gridcolor=BORDER, zeroline=False)
+
+
+def _clean_data(history):
+    """Filter out IDLE/STOP states so trends only show meaningful production data."""
+    df = pd.DataFrame(history)
+    if df.empty: return df
+    df["time"] = pd.to_datetime(df["ts"], unit="s")
+    # Exclude IDLE rows where all actuators are 0 (not meaningful for trends)
+    if "plc_state" in df.columns:
+        df = df[df["plc_state"] != "IDLE"]
+    # Round for display precision
+    for c in ["pasteur_temp", "cooler_temp", "tank_level", "flow_rate",
+              "heater_power_cmd", "cooling_valve_cmd", "bottle_count"]:
+        if c in df.columns: df[c] = df[c].round(1)
+    return df
 
 
 @st.fragment(run_every=f"{st.session_state['refresh_s']}s")
 def trends_view():
     window = st.session_state["window_s"]
     history = engine.historian.recent(window_s=window)
-
     if not history:
-        st.info("No data yet. Press Start on the SCHEMATICS page to begin production.")
+        st.info("No data yet. Press START on the SCHEMATIC page.")
         return
 
-    df = pd.DataFrame(history)
-    df["time"] = pd.to_datetime(df["ts"], unit="s")
+    df = _clean_data(history)
+    if df.empty:
+        st.info("Waiting for production data...")
+        return
 
     latest = engine.latest()
     alarm_code = int(latest.get("alarm_code", 0))
     frozen = alarm_code == config.ALARM_DATA_STALE
+    if frozen: st.warning("Data frozen.")
 
-    if frozen:
-        st.warning("Data feed is frozen — displaying last known values.")
+    # ── Sensor Trends with Freeze toggle ──
+    c_title, c_btn = st.columns([6, 1])
+    with c_title:
+        st.markdown('<div class="section-label" style="margin-bottom:0;">Sensor Trends</div>', unsafe_allow_html=True)
+    with c_btn:
+        frozen_label = "UNFREEZE" if st.session_state["freeze_sensors"] else "FREEZE"
+        if st.button(frozen_label, key="btn_freeze_sensors", use_container_width=True):
+            st.session_state["freeze_sensors"] = not st.session_state["freeze_sensors"]
 
-    # ── 2x2 Sensor Trends ──
-    st.markdown('<div class="section-label">Sensor Trends</div>', unsafe_allow_html=True)
-
-    fig = make_subplots(rows=2, cols=2,
-                        subplot_titles=("Pasteurization Temperature (°C)", "Tank Level (%)",
-                                        "Flow Rate (L/min)", "Bottles Capped"))
-    clrs = {"pasteur_temp": "#c0392b", "tank_level": "#3b6f8c",
-            "flow_rate": "#2d8a4e", "bottle_count": "#d4a040"}
-
-    for (key, clr), (row, col) in zip(clrs.items(), [(1,1),(1,2),(2,1),(2,2)]):
-        if key in df.columns:
+    if not st.session_state["freeze_sensors"]:
+        fig = make_subplots(rows=2, cols=2, subplot_titles=("Pasteurization Temp", "Tank Level", "Flow Rate", "Bottles Capped"))
+        traces = [
+            ("pasteur_temp", "#f85149", 1, 1, "°C"), ("tank_level", "#58a6ff", 1, 2, "%"),
+            ("flow_rate", "#3fb950", 2, 1, "L/min"), ("bottle_count", "#d2991d", 2, 2, ""),
+        ]
+        yranges = {"pasteur_temp": [60, 82], "tank_level": [20, 90], "flow_rate": [0, 50], "bottle_count": None}
+        for key, clr, row, col, unit in traces:
+            if key not in df.columns: continue
             fig.add_trace(go.Scatter(x=df["time"], y=df[key], name=key,
-                          line=dict(color=clr, width=2.2), fill="tozeroy",
-                          fillcolor=f"rgba({','.join(str(int(clr[i:i+2],16)) for i in (1,3,5))},0.06)"),
-                          row=row, col=col)
+                          line=dict(color=clr, width=1.8, shape="spline"),
+                          mode="lines", hovertemplate=f"%{{y:.1f}} {unit}<extra></extra>"), row=row, col=col)
+            yr = yranges.get(key)
+            if yr: fig.update_yaxes(range=yr, row=row, col=col, **_AXIS)
+        fig.add_hline(y=config.PASTEUR_SAFE_MAX, line_dash="dot", line_color="#f8514966", row=1, col=1)
+        fig.add_hline(y=config.PASTEUR_SAFE_MIN, line_dash="dot", line_color="#f8514966", row=1, col=1)
+        for ev in engine.historian.recent_alarms(50):
+            code = int(ev.get("alarm_code", 0)); ts_val = ev.get("ts", 0)
+            if code and ts_val >= df["ts"].iloc[0]:
+                fig.add_vline(x=pd.to_datetime(ts_val, unit="s"), line_color="#f85149", line_dash="dash", line_width=1.5, row=1, col=1)
+        fig.update_layout(height=500, showlegend=False, **_LAYOUT)
+        fig.update_xaxes(**_AXIS); fig.update_yaxes(**_AXIS)
+        st.plotly_chart(fig, use_container_width=True, key="sensor_2x2")
+    else:
+        st.caption("Sensors chart frozen — unfreeze to update.")
 
-    # Safe zone bands
-    fig.add_hline(y=config.PASTEUR_SAFE_MAX, line_dash="dot", line_color="#c0392b", row=1, col=1)
-    fig.add_hline(y=config.PASTEUR_SAFE_MIN, line_dash="dot", line_color="#c0392b", row=1, col=1)
+    # ── Actuator Charts with Freeze toggle ──
+    c_title2, c_btn2 = st.columns([6, 1])
+    with c_title2:
+        st.markdown('<div class="section-label" style="margin-bottom:0;">Actuator Commands</div>', unsafe_allow_html=True)
+    with c_btn2:
+        frozen_label2 = "UNFREEZE" if st.session_state["freeze_actuators"] else "FREEZE"
+        if st.button(frozen_label2, key="btn_freeze_actuators", use_container_width=True):
+            st.session_state["freeze_actuators"] = not st.session_state["freeze_actuators"]
 
-    # Alarm markers
-    for ev in engine.historian.recent_alarms(50):
-        code = int(ev.get("alarm_code", 0))
-        ts_val = ev.get("ts", 0)
-        if code and ts_val >= df["ts"].iloc[0]:
-            fig.add_vline(x=pd.to_datetime(ts_val, unit="s"), line_color="#c0392b",
-                          line_dash="dash", line_width=1.8, row=1, col=1)
+    if not st.session_state["freeze_actuators"]:
+        c1, c2 = st.columns(2)
+        with c1:
+            if "heater_power_cmd" in df.columns:
+                fh = go.Figure()
+                fh.add_trace(go.Scatter(x=df["time"], y=df["heater_power_cmd"], name="Heater",
+                              line=dict(color="#d2991d", width=2, shape="spline"),
+                              mode="lines", hovertemplate="%{y:.0f} %<extra></extra>"))
+                fh.update_layout(title="Heater Power (%)", height=260, **_LAYOUT)
+                fh.update_yaxes(range=[0, 105], **_AXIS); fh.update_xaxes(**_AXIS)
+                st.plotly_chart(fh, use_container_width=True, key="heater_chart")
+        with c2:
+            fc = make_subplots(specs=[[{"secondary_y": True}]])
+            if "cooler_temp" in df.columns:
+                fc.add_trace(go.Scatter(x=df["time"], y=df["cooler_temp"], name="Cooler °C",
+                              line=dict(color="#58a6ff", width=2, shape="spline"),
+                              mode="lines", hovertemplate="%{y:.1f} °C<extra></extra>"))
+            if "cooling_valve_cmd" in df.columns:
+                fc.add_trace(go.Scatter(x=df["time"], y=df["cooling_valve_cmd"], name="Cooling %",
+                              line=dict(color="#3fb950", width=1.5, dash="dot"),
+                              mode="lines", hovertemplate="%{y:.0f} %<extra></extra>"), secondary_y=True)
+            fc.update_layout(title="Cooler Temperature & Valve", height=260, **_LAYOUT,
+                             showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=1.02))
+            fc.update_yaxes(range=[0, 35], **_AXIS)
+            fc.update_yaxes(range=[0, 105], secondary_y=True, **_AXIS)
+            fc.update_xaxes(**_AXIS)
+            st.plotly_chart(fc, use_container_width=True, key="cooler_chart")
+    else:
+        st.caption("Actuator charts frozen — unfreeze to update.")
 
-    fig.update_layout(height=520, showlegend=False, margin=dict(t=45, b=15, l=40, r=20),
-                      plot_bgcolor="#fdfcf9", paper_bgcolor="#fdfcf9",
-                      font=dict(color="#3a3a3a", size=11))
-    fig.update_xaxes(gridcolor="#e8e0d5"); fig.update_yaxes(gridcolor="#e8e0d5")
-    st.plotly_chart(fig, use_container_width=True, key="trend_2x2")
-
-    # ── Actuator Charts ──
-    st.markdown('<div class="section-label">Actuator Commands</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
-
-    with c1:
-        if "heater_power_cmd" in df.columns:
-            fig_h = go.Figure()
-            fig_h.add_trace(go.Scatter(x=df["time"], y=df["heater_power_cmd"],
-                                       name="Heater", line=dict(color="#e8841a", width=2.5),
-                                       fill="tozeroy", fillcolor="rgba(232,132,26,0.08)"))
-            fig_h.update_layout(height=260, title="Heater Power (%)",
-                               plot_bgcolor="#fdfcf9", paper_bgcolor="#fdfcf9",
-                               margin=dict(t=35, b=15, l=30, r=10),
-                               font=dict(color="#3a3a3a", size=10))
-            fig_h.update_xaxes(gridcolor="#e8e0d5"); fig_h.update_yaxes(gridcolor="#e8e0d5")
-            st.plotly_chart(fig_h, use_container_width=True)
-
-    with c2:
-        fig_c = make_subplots(specs=[[{"secondary_y": True}]])
-        if "cooler_temp" in df.columns:
-            fig_c.add_trace(go.Scatter(x=df["time"], y=df["cooler_temp"],
-                                       name="Cooler °C", line=dict(color="#3b6f8c", width=2.2)))
-        if "cooling_valve_cmd" in df.columns:
-            fig_c.add_trace(go.Scatter(x=df["time"], y=df["cooling_valve_cmd"],
-                                       name="Cooling %", line=dict(color="#2d8a4e", width=1.8, dash="dot")),
-                            secondary_y=True)
-        fig_c.update_layout(height=260, title="Cooler Temperature & Valve",
-                           plot_bgcolor="#fdfcf9", paper_bgcolor="#fdfcf9",
-                           margin=dict(t=35, b=15, l=30, r=10),
-                           font=dict(color="#3a3a3a", size=10), showlegend=True,
-                           legend=dict(orientation="h", yanchor="bottom", y=1.02))
-        fig_c.update_xaxes(gridcolor="#e8e0d5"); fig_c.update_yaxes(gridcolor="#e8e0d5")
-        st.plotly_chart(fig_c, use_container_width=True)
-
-    # ── Raw Data ──
-    with st.expander("Raw Data (last 20 records)"):
-        st.dataframe(df.tail(20).sort_values("time", ascending=False),
-                     use_container_width=True, hide_index=True)
+    with st.expander("Raw Data (last 20 active records)"):
+        st.dataframe(df.tail(20).sort_values("time", ascending=False), use_container_width=True, hide_index=True)
 
 
 trends_view()

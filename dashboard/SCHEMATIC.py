@@ -388,7 +388,7 @@ def live_view():
     flow  = float(latest.get("flow_rate", 0))
     bc    = int(latest.get("bottle_count", 0))
     belt  = int(latest.get("conveyor_queue", 0))
-    belt_max = int(latest.get("conveyor_max", 8))
+    belt_max = int(latest.get("conveyor_max", config.CONVEYOR_MAX_BOTTLES))
     bp    = int(latest.get("bottle_present", 0))
     hc    = float(latest.get("heater_power_cmd", 0))
     pc    = float(latest.get("pump_cmd", 0))

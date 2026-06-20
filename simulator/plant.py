@@ -130,12 +130,11 @@ class PlantSimulator:
         # 3. Pasteurizer temperature (S2) --------------------------------
         self._update_pasteur_temp(heater_power_cmd)
 
-        # 4. Cooler (S3) — cooling proportional to valve opening
-        cooling_factor = cooling_valve_cmd / 100.0 if cooling_valve_cmd > 0 else 0.0
-        cool_target = (config.COOLER_SETPOINT * cooling_factor
-                       + self.pasteur_temp * (1 - cooling_factor))
-        self.cooler_temp += 0.08 * (cool_target - self.cooler_temp)
-        self.cooler_temp += random.uniform(-0.02, 0.02)
+        # 4. Cooler (S3) — rate-scaling model (physically correct for HX):
+        # more cooling flow = faster approach to COOLER_SETPOINT (20 degC).
+        cooling_rate = 0.08 * max(cooling_valve_cmd / 100.0, 0.0)
+        self.cooler_temp += cooling_rate * (config.COOLER_SETPOINT - self.cooler_temp)
+        self.cooler_temp += random.uniform(-0.10, 0.10)
 
         # 5. Filler & 6. Capper / Conveyor (S4 / S5) ---------------------
         self._update_bottling(conveyor_cmd, fill_valve_cmd, capper_cmd)
@@ -165,65 +164,70 @@ class PlantSimulator:
 
     def _update_bottling(self, conveyor_cmd: float, fill_valve_cmd: int,
                          capper_cmd: int) -> None:
-        """Discrete-event model for bottle presence, filling and capping.
+        """Synchronous 4-lane rotary filler model.
 
-        Conveyor speed is proportional (0-100%). At 100% = 1 bottle per BOTTLE_CYCLE_TICKS.
-        Below ~30% the conveyor is effectively stopped.
+        All FILL_LANES operate together: bottles enter all lanes simultaneously
+        at the start of each fill cycle, fill in parallel, then exit together.
+        The fill cycle duration is flow-dependent and determines conveyor speed.
         """
         if conveyor_cmd <= 0:
             return
-
-        # Cycle length inversely proportional to speed
-        # At 100% speed: BOTTLE_CYCLE_TICKS (6 ticks per bottle)
-        # At 50% speed: 12 ticks per bottle
-        # Below 20%: effectively stopped
         if conveyor_cmd < 20:
             return
-        cycle = int(config.BOTTLE_CYCLE_TICKS * 100.0 / conveyor_cmd)
-        cycle = max(3, min(cycle, 30))  # clamp: fastest 3 ticks, slowest 30
-        self._station_timer = (self._station_timer + 1) % cycle
-
-        if self._station_timer == 0:
-            self.bottle_present = 0
-            self._bottle_capped = 0
+        # Safety: don't load bottles when there's no product flow (PUMP_FAIL etc.)
+        if self.flow_rate < 1.0 and not any(self._lane_present):
             return
 
-        # Assign bottle to first available lane on station entry
-        for i in range(FILL_LANES):
-            if not self._lane_present[i] and not self._lane_filled[i]:
-                self._lane_present[i] = 1
-                self._lane_fill_timer[i] = 0
-                self._lane_filled[i] = 0
-                break
-
-        # Update bottle_present (any lane has a bottle)
-        self.bottle_present = 1 if any(self._lane_present) else 0
-
-        # Dynamic fill duration based on flow rate
+        # Dynamic fill duration: 3t at 40 L/min, proportional at other flows
         fr = max(self.flow_rate, 5.0)
         dyn_fill = max(2, min(8, round(config.FILL_DURATION_TICKS * 40.0 / fr)))
 
-        # Each lane fills independently
+        # Fill cycle = fill time + 1t gap between batches. At 100% speed,
+        # the cycle should be at least dyn_fill ticks to complete filling.
+        # The conveyor_cmd scales the cycle: slower conveyor = longer cycle.
+        base_cycle = dyn_fill + 1
+        cycle = max(base_cycle, int(base_cycle * 100.0 / max(conveyor_cmd, 20)))
+        cycle = max(4, min(cycle, 36))
+        self._station_timer = (self._station_timer + 1) % cycle
+
+        # Phase 0: Start of new fill cycle — load ALL lanes with bottles
+        if self._station_timer == 0:
+            self.bottle_present = 0
+            self._bottle_capped = 0
+
+        # Phase 1: Load bottles into all empty lanes (first tick of cycle)
+        if self._station_timer == 1:
+            for i in range(FILL_LANES):
+                if not self._lane_present[i]:
+                    self._lane_present[i] = 1
+                    self._lane_fill_timer[i] = 0
+                    self._lane_filled[i] = 0
+            self.bottle_present = 1
+
+        # Phase 2-N: Fill all lanes simultaneously
         for i in range(FILL_LANES):
             if self._lane_present[i] and fill_valve_cmd and not self._lane_filled[i]:
                 self._lane_fill_timer[i] += 1
                 if self._lane_fill_timer[i] >= dyn_fill:
                     self._lane_filled[i] = 1
 
-        # Capping: filled bottles from any lane move to conveyor
-        for i in range(FILL_LANES):
-            if self._lane_filled[i] and capper_cmd and not self._bottle_capped:
-                if self.conveyor_queue < self.conveyor_max:
+        # Phase N+1: When ALL lanes are filled, discharge to capper/conveyor
+        all_done = all(not self._lane_present[i] or self._lane_filled[i] for i in range(FILL_LANES))
+
+        if all_done and any(self._lane_filled) and capper_cmd:
+            for i in range(FILL_LANES):
+                if self._lane_filled[i] and self.conveyor_queue < self.conveyor_max:
                     self.bottle_count += 1
                     self.conveyor_queue += 1
                     self._lane_present[i] = 0
                     self._lane_filled[i] = 0
                     self._lane_fill_timer[i] = 0
-                    self._bottle_capped = 1
+            self._bottle_capped = 1
+            self.bottle_present = 0
 
-        # Conveyor discharge: independent discharge timer, rate proportional to speed.
-        # At 100% conveyor, 1 bottle exits every BOTTLE_CYCLE_TICKS ticks.
-        discharge_interval = max(1, int(config.BOTTLE_CYCLE_TICKS * 100.0 / max(conveyor_cmd, 20)))
+        # Conveyor discharge rate matched to 4-lane filler throughput.
+        # At 100% conveyor: FILL_LANES bottles exit every BOTTLE_CYCLE_TICKS ticks.
+        discharge_interval = max(1, int(config.BOTTLE_CYCLE_TICKS * 100.0 / max(conveyor_cmd, 20) / FILL_LANES))
         self._discharge_timer += 1
         if self._discharge_timer >= discharge_interval and self.conveyor_queue > 0:
             self._discharge_timer = 0

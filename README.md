@@ -28,8 +28,13 @@ Press **START**, watch the process flow diagram update live. Inject faults from 
 | Thermal model | Fast response (0.20/0.25 time constant, ±0.08 noise) | **Industrial inertia** (0.05/0.08 time constant, ±0.02 noise) — realistic slow heating/cooling, smooth trend curves |
 | Heater/Cooler control | Simple integral + clamping (windup, oscillation) | **PI with anti-windup + tuned gains** — Kp=1.5 (smooth, no sawtooth) |
 | Filler model | Single fill head | **4-lane rotary filler** — parallel heads with individual detection/fill/done states |
-| Tank level alarm | None | **TANK_OVERFLOW (95%) + TANK_EMPTY (5%)** — stops line on critical levels |
-| Conveyor model | Bottle count only | **Queue model** — bottles enter belt, exit via independent discharge timer, `bottles_completed` output counter, max capacity 24 |
+| Tank level alarm | None | **TANK_OVERFLOW (90%) + TANK_EMPTY (15%)** — early warning before physical limits; priority above temp/pump faults |
+| Conveyor model | Bottle count only | **Queue model** — bottles enter belt, exit via independent discharge timer. `bottles_completed` output counter, max capacity **48** |
+| Cooler physics | Mixing/blending model (incorrect for HX) | **Rate-scaling model** (physically correct): cooling rate ∝ valve opening, target always 20°C |
+| Fault priority | TEMP > PUMP > SENSOR | **TANK > TEMP > PUMP > SENSOR** — physical safety hazards first |
+| Fill valve safety | Stays open if bottle departs mid-fill | **Closes immediately** when bottle_present goes low |
+| Heater gain | Adapted only for manual pump | **Adapts to actual flow_rate** in all modes: gain 1.0/1.5/2.5 at low/med/high flow |
+| PUMP_FAIL guard | Bottles loaded with no product | **Returns early** if flow_rate < 1.0 and no active fill — prevents dry bottling |
 | Flow→Fill→Conveyor link | Fixed timings (3t fill, 6t cycle) | **Dynamic chain**: pump speed → flow rate → fill duration (2-8t) → conveyor speed (25-100%) |
 | Fast recovery | Manual offsets | Proportional reset on FAULT clear; pump pre-charged at 70% on START |
 
@@ -42,7 +47,9 @@ Press **START**, watch the process flow diagram update live. Inject faults from 
 | Button feedback | None | **CSS :active press effect + ripple + toast confirmation** |
 | START behavior | Starts line, keeps manual overrides | **Clears all manuals → full AUTO mode** |
 | Manual sidebar order | Feed Pump first | **Inlet Valve → Feed Pump → Heater → Cooling → Conveyor** (process order) |
-| Trends page | KeyError on cooler_temp chart | Fixed: `cooler_temp` + `cooling_valve_cmd` added to historian columns |
+| Trends page | KeyError on cooler_temp chart; zoom reset on refresh | Fixed: `cooler_temp` + `cooling_valve_cmd` added to historian columns. **Per-chart FREEZE/UNFREEZE** — snapshots dataframe, zoom/pan preserved while data accumulates |
+| Trends data | IDLE rows mixed in causing vertical cliffs | **Filtered out** — only RUNNING/STARTING/FAULT states plotted. Fixed y-axis ranges prevent micro-fluctuation amplification |
+| Filler display | Single head count | **4-lane status lights** — per-lane indicator row: ● blue=FILLING, ● green=DONE, ○ gray=IDLE |
 
 ### Code Quality
 | Area | V2 | V3 |
@@ -160,7 +167,7 @@ flowchart LR
     FP --> S2[S2 Pasteurizer\nSetpoint: 72 degC\nSafe: 68-78 degC]
     S2 --> S3[S3 Cooler\nTarget: 20 degC\nMax bottling: 25 degC]
     S3 --> S4[S4 Filler\nFill: 3 ticks\nCycle: 6 ticks/bottle]
-    S4 --> S5[S5 Capper/Conveyor\nQueue: 0-24 bottles\nSpeed: 25-100%]
+    S4 --> S5[S5 Capper/Conveyor\nQueue: 0-48 bottles (max)\nSpeed: 25-100%]
     S5 --> OUT[Output\nbottles_completed]
 ```
 
@@ -171,9 +178,9 @@ flowchart LR
 | S1 Inlet Valve | Proportional (P) | Target 50%, gain=2.0 (smooth, no oscillation). Full open at <=30%, full close at >=80% |
 | S1 Feed Pump | Proportional (P) | Speed proportional to tank level: 30% at low, 100% at high. Smoothing factor 0.4 |
 | S2 Pasteurizer | PI + anti-windup | Setpoint 72 degC, Kp=1.5. Gain adapts to manual pump override (1.0-2.5). Anti-windup: blocks only when saturated + error pushes deeper |
-| S3 Cooler | PI + anti-windup | Target 20 degC, Kp=1.5. Anti-windup same as heater |
-| S4 Filler | **4-lane rotary** + flow-dependent timer | 4 parallel fill heads. Each: detect→fill→done. `fill_needed = clamp(FILL_DURATION_TICKS * 40 / flow_rate, 2, 8)`. Bottles assigned round-robin to first available lane |
-| S5 Conveyor | Flow-matched proportional + discharge timer | `conveyor_cmd = clamp(100 * FILL_DURATION_TICKS / fill_needed, 25, 100)`. Independent discharge timer: 1 bottle exits per cycle. Queue max 24 |
+| S3 Cooler | PI + anti-windup | Target 20 degC, Kp=1.5. Rate-scaling physics: more valve = faster approach to 20°C. Anti-windup same as heater |
+| S4 Filler | **4-lane synchronous rotary** + flow-dependent timer | All 4 heads fill simultaneously each cycle. `fill_needed = clamp(FILL_DURATION_TICKS * 40 / flow_rate, 2, 8)`. Valve closes if bottle departs mid-fill |
+| S5 Conveyor | Mechanically linked to fill cycle + discharge timer | Conveyor speed = `100*(FILL_TICKS+1)/(fill_needed+1)`, clamped 20-100%. Discharge rate matched to 4-lane throughput. Queue max 48 |
 
 ## Industrial Speed Chain
 
@@ -206,8 +213,8 @@ Dashboard shows per-lane status: ● green=DONE, ● blue=FILLING, ○ gray=IDLE
 | 2 | Feed pump failure | PUMP_NO_FLOW (20) | 3 ticks | pump on but no flow/feedback → FAULT |
 | 3 | Temperature excursion | TEMP_OUT_OF_RANGE (30) | 3 ticks | temp outside 68-78 degC after warm-up → FAULT; auto-clears when back in range |
 | 4 | Data link stale | DATA_STALE (40) | Instant | tags frozen, dashboard shows last values |
-| — | Tank >95% | TANK_OVERFLOW (50) | 3 ticks | Overflow risk → FAULT |
-| — | Tank <5% | TANK_EMPTY (51) | 3 ticks | Dry-run risk → FAULT |
+| — | Tank >90% | TANK_OVERFLOW (50) | 3 ticks | Overflow risk → FAULT (highest priority after DATA_STALE) |
+| — | Tank <15% | TANK_EMPTY (51) | 3 ticks | Dry-run risk → FAULT (above MIN_PUMP=10%, early warning) |
 
 ## Conveyor Output Model
 
@@ -272,12 +279,12 @@ requirements.txt
 | TANK_LEVEL_TARGET | 50% | Tank level setpoint |
 | TANK_LEVEL_LOW / HIGH | 30% / 80% | Inlet valve full open / full close |
 | TANK_LEVEL_MIN_PUMP | 10% | Pump dry-run guard |
-| TANK_CRITICAL_HIGH / LOW | 95% / 5% | Overflow / empty alarm thresholds |
+| TANK_CRITICAL_HIGH / LOW | 90% / 15% | Overflow / empty alarm thresholds (early warning before physical limits) |
 | PASTEUR_SETPOINT | 72 degC | Pasteurization target |
 | PASTEUR_SAFE_MIN / MAX | 68 / 78 degC | Safe temperature band |
-| COOLER_SETPOINT | 20 degC | Cooling target |
+| COOLER_SETPOINT | 20 degC | Cooling target (rate-scaling model) |
 | COOLER_MAX_BOTTLING | 25 degC | No bottling above this |
-| CONVEYOR_MAX_BOTTLES | 24 | Max bottles on belt |
+| CONVEYOR_MAX_BOTTLES | 48 | Max bottles on belt (matched to 4-lane throughput) |
 | ALARM_DEBOUNCE_TICKS | 3 | Consecutive abnormal ticks to latch alarm |
 | FILL_DURATION_TICKS | 3 | Nominal fill duration at 40 L/min; dynamically scaled 2-8 ticks by flow rate |
 | BOTTLE_CYCLE_TICKS | 6 | Bottle cycle length at 100% speed |

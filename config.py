@@ -31,8 +31,8 @@ TANK_LEVEL_LOW = 30.0          # %  -> inlet valve fully open below this
 TANK_LEVEL_HIGH = 80.0         # %  -> inlet valve fully closed above this
 TANK_LEVEL_TARGET = 55.0       # %  -> target level (midpoint of hysteresis band)
 TANK_LEVEL_MIN_PUMP = 10.0     # %  -> do not run feed pump below this (dry-run guard)
-TANK_CRITICAL_HIGH = 95.0      # %  -> overflow alarm
-TANK_CRITICAL_LOW = 5.0        # %  -> empty alarm
+TANK_CRITICAL_HIGH = 90.0      # %  -> overflow alarm (early warning before 100%)
+TANK_CRITICAL_LOW = 15.0       # %  -> empty alarm (above MIN_PUMP=10, gives time to react)
 
 PASTEUR_SETPOINT = 72.0        # degC target pasteurization temperature
 PASTEUR_SAFE_MIN = 68.0        # degC lower safe bound
@@ -44,7 +44,7 @@ COOLER_MAX_BOTTLING = 25.0     # degC — do NOT bottle when cooler_temp exceeds
 
 FILL_DURATION_TICKS = 3        # ticks needed to fill one bottle
 BOTTLE_CYCLE_TICKS = 6         # ticks per bottle at the filling station (incl. gap)
-CONVEYOR_MAX_BOTTLES = 24      # max bottles that can be queued on the conveyor belt
+CONVEYOR_MAX_BOTTLES = 48      # max bottles on conveyor belt (matched to 4-lane throughput)
 AMBIENT_TEMP = 25.0            # degC ambient temperature
 
 # Number of consecutive abnormal ticks before the PLC latches an alarm.

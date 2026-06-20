@@ -104,12 +104,12 @@ class PLCController:
         self._prev_state = self.state
         self._update_state(operator_start, operator_stop)
 
-        # Detect FAULT→IDLE transition (fast-recovery: reset accumulators)
-        if self._prev_state == config.PLC_FAULT and self.state == config.PLC_IDLE:
-            self._fast_recovery_init()
-
         # 2. Fault detection (always active — safety is never bypassed) --
         self._detect_faults(sensors, data_stale)
+
+        # Detect FAULT→IDLE transition (auto-clear or manual acknowledge)
+        if self._prev_state == config.PLC_FAULT and self.state == config.PLC_IDLE:
+            self._fast_recovery_init()
 
         # 3. Control logic ----------------------------------------------
         running = self.state in (config.PLC_RUNNING, config.PLC_STARTING)
@@ -174,15 +174,19 @@ class PLCController:
         tank_level = float(sensors.get("tank_level", 50.0))
         pasteur_temp = float(sensors.get("pasteur_temp", 25.0))
         cooler_temp = float(sensors.get("cooler_temp", 25.0))
-        flow_rate = float(sensors.get("flow_rate", 40.0))
+        flow_rate = float(sensors.get("flow_rate", 0.0))
 
-        # Track manual→auto transitions: reset related debounce counters
+        # Track manual→auto transitions: reset ALL related debounce counters
         # so auto has time to recover before faults re-trigger.
         released = self._prev_manuals - set(man.keys())
-        if "heater_power_cmd" in released:
-            self._temp_range_count = 0  # give auto time to bring temp back
+        if "heater_power_cmd" in released or "cooling_valve_cmd" in released:
+            self._temp_range_count = 0
+            self._temp_stuck_count = 0
         if "pump_cmd" in released:
-            self._no_flow_count = 0     # give auto time to restore flow
+            self._no_flow_count = 0
+        if "inlet_valve_cmd" in released:
+            self._tank_overflow_count = 0
+            self._tank_empty_count = 0
         self._prev_manuals = set(man.keys())
         bottle_present = int(sensors.get("bottle_present", 0))
 
@@ -238,17 +242,17 @@ class PLCController:
 
         # ── S2: Heater (PI with anti-windup) ──────────────────────
         if man_heater:
-            heater_power_cmd = float(man["heater_power_cmd"])
+            heater_power_cmd = round(float(man["heater_power_cmd"]), 1)
             self.heater_power_cmd = heater_power_cmd
         else:
             error = config.PASTEUR_SETPOINT - pasteur_temp
-            gain = 1.5
-            if man_pump:
-                manual_flow = float(man["pump_cmd"])
-                if manual_flow > 70:
-                    gain = 2.5
-                elif manual_flow < 30:
-                    gain = 1.0
+            # Gain adapts to actual flow rate: more flow = more cooling = need more heat
+            if flow_rate > 35:
+                gain = 2.5
+            elif flow_rate < 15:
+                gain = 1.0
+            else:
+                gain = 1.5
             # Conditional integration: block only if already at limit AND
             # error would push further into saturation (true anti-windup)
             candidate = self.heater_power_cmd + gain * error
@@ -291,17 +295,22 @@ class PLCController:
         else:
             if bottle_present and ready:
                 self._fill_timer = fill_needed
-            fill_valve_cmd = 1 if (self._fill_timer > 0 and ready) else 0
+            fill_valve_cmd = 1 if (self._fill_timer > 0 and bottle_present and ready) else 0
             if self._fill_timer > 0:
                 self._fill_timer -= 1
 
-        # ── S5: Conveyor speed matches fill rate ─────────────────────
+        # ── S5: Conveyor speed mechanically linked to fill cycle ────
+        # The filler and conveyor share a common drive: conveyor speed
+        # determines the fill cycle rate. Faster conveyor = shorter cycles.
+        # But cycles must be >= fill_needed ticks for bottles to fill.
         if man_conv:
             conveyor_cmd = float(man["conveyor_cmd"])
         else:
             if ready:
-                base = 100.0 * config.FILL_DURATION_TICKS / max(1, fill_needed)
-                conveyor_cmd = _clamp(base, 25.0, 100.0)
+                # Conveyor speed: 100% when fill_needed=3t (40L/min),
+                # proportionally slower for longer fill times.
+                base = 100.0 * (config.FILL_DURATION_TICKS + 1) / max(fill_needed + 1, 1)
+                conveyor_cmd = _clamp(base, 20.0, 100.0)
             else:
                 conveyor_cmd = 0.0
 
@@ -405,17 +414,18 @@ class PLCController:
                 self.state = config.PLC_IDLE
 
         # Latch the first alarm that exceeds its debounce threshold.
+        # Priority order: safety hazards (tank) > process (temp) > equipment > sensor.
         if self.alarm_code == config.ALARM_NONE:
-            if self._no_flow_count >= config.ALARM_DEBOUNCE_TICKS:
-                self.alarm_code = config.ALARM_PUMP_NO_FLOW
-            elif self._temp_stuck_count >= config.ALARM_DEBOUNCE_TICKS:
-                self.alarm_code = config.ALARM_SENSOR_TEMP_STUCK
-            elif self._temp_range_count >= config.ALARM_DEBOUNCE_TICKS:
-                self.alarm_code = config.ALARM_TEMP_OUT_OF_RANGE
-            elif self._tank_overflow_count >= config.ALARM_DEBOUNCE_TICKS:
+            if self._tank_overflow_count >= config.ALARM_DEBOUNCE_TICKS:
                 self.alarm_code = config.ALARM_TANK_OVERFLOW
             elif self._tank_empty_count >= config.ALARM_DEBOUNCE_TICKS:
                 self.alarm_code = config.ALARM_TANK_EMPTY
+            elif self._temp_range_count >= config.ALARM_DEBOUNCE_TICKS:
+                self.alarm_code = config.ALARM_TEMP_OUT_OF_RANGE
+            elif self._no_flow_count >= config.ALARM_DEBOUNCE_TICKS:
+                self.alarm_code = config.ALARM_PUMP_NO_FLOW
+            elif self._temp_stuck_count >= config.ALARM_DEBOUNCE_TICKS:
+                self.alarm_code = config.ALARM_SENSOR_TEMP_STUCK
 
         self._prev_temp = pasteur_temp
 

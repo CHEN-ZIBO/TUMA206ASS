@@ -161,10 +161,13 @@ def alarms_view():
     cache = st.session_state.setdefault("ai_cache", {})
 
     if alarm_code:
-        if alarm_code not in cache:
+        # Cache key includes sensor fingerprint so recurrent alarms get fresh diagnosis
+        sensor_fp = f"{latest.get('pasteur_temp',0):.0f}_{latest.get('tank_level',0):.0f}_{latest.get('flow_rate',0):.0f}"
+        cache_key = f"{alarm_code}_{sensor_fp}"
+        if cache_key not in cache:
             with st.spinner("Analyzing system state..."):
-                cache[alarm_code] = assistant.diagnose(latest, alarm_code, history)
-        result = cache.get(alarm_code)
+                cache[cache_key] = assistant.diagnose(latest, alarm_code, history)
+        result = cache.get(cache_key)
 
         if result:
             conf = result.get("confidence_level", "unknown")

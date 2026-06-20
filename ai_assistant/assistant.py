@@ -68,6 +68,20 @@ _RULE_ADVICE: Dict[int, Dict[str, str]] = {
                 "link and the publisher process, then confirm tags resume "
                 "updating before trusting the dashboard.",
     },
+    config.ALARM_TANK_OVERFLOW: {
+        "label": "Raw tank overflow risk",
+        "text": f"Tank level has exceeded {config.TANK_CRITICAL_HIGH:.0f}%. "
+                "Immediate action: stop the feed pump, fully close the inlet "
+                "valve, and check the level sensor. If level continues to rise, "
+                "activate the emergency overflow diversion.",
+    },
+    config.ALARM_TANK_EMPTY: {
+        "label": "Raw tank empty",
+        "text": f"Tank level has dropped below {config.TANK_CRITICAL_LOW:.0f}%. "
+                "The feed pump is at risk of dry-running. Stop the pump "
+                "immediately, open the inlet valve fully, and verify raw "
+                "beverage supply availability before restarting.",
+    },
 }
 
 

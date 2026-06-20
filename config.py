@@ -27,9 +27,12 @@ TICK_INTERVAL_S = 1.0         # real seconds between ticks in the background loo
 # ---------------------------------------------------------------------------
 # 2. Process set-points and physical limits (M1 / M2 share these)
 # ---------------------------------------------------------------------------
-TANK_LEVEL_LOW = 30.0          # %  -> open inlet valve below this
-TANK_LEVEL_HIGH = 80.0         # %  -> close inlet valve above this
+TANK_LEVEL_LOW = 30.0          # %  -> inlet valve fully open below this
+TANK_LEVEL_HIGH = 80.0         # %  -> inlet valve fully closed above this
+TANK_LEVEL_TARGET = 55.0       # %  -> target level (midpoint of hysteresis band)
 TANK_LEVEL_MIN_PUMP = 10.0     # %  -> do not run feed pump below this (dry-run guard)
+TANK_CRITICAL_HIGH = 95.0      # %  -> overflow alarm
+TANK_CRITICAL_LOW = 5.0        # %  -> empty alarm
 
 PASTEUR_SETPOINT = 72.0        # degC target pasteurization temperature
 PASTEUR_SAFE_MIN = 68.0        # degC lower safe bound
@@ -41,6 +44,7 @@ COOLER_MAX_BOTTLING = 25.0     # degC — do NOT bottle when cooler_temp exceeds
 
 FILL_DURATION_TICKS = 3        # ticks needed to fill one bottle
 BOTTLE_CYCLE_TICKS = 6         # ticks per bottle at the filling station (incl. gap)
+CONVEYOR_MAX_BOTTLES = 8       # max bottles that can be queued on the conveyor belt
 AMBIENT_TEMP = 25.0            # degC ambient temperature
 
 # Number of consecutive abnormal ticks before the PLC latches an alarm.
@@ -71,6 +75,8 @@ ALARM_SENSOR_TEMP_STUCK = 10
 ALARM_PUMP_NO_FLOW = 20
 ALARM_TEMP_OUT_OF_RANGE = 30
 ALARM_DATA_STALE = 40
+ALARM_TANK_OVERFLOW = 50
+ALARM_TANK_EMPTY = 51
 
 ALARM_LABELS = {
     ALARM_NONE: "No alarm",
@@ -78,6 +84,8 @@ ALARM_LABELS = {
     ALARM_PUMP_NO_FLOW: "PUMP_NO_FLOW",
     ALARM_TEMP_OUT_OF_RANGE: "TEMP_OUT_OF_RANGE",
     ALARM_DATA_STALE: "DATA_STALE",
+    ALARM_TANK_OVERFLOW: "TANK_OVERFLOW",
+    ALARM_TANK_EMPTY: "TANK_EMPTY",
 }
 
 # Human readable, operator-facing alarm descriptions (used by M4 and as a hint to M5).
@@ -99,6 +107,15 @@ ALARM_DESCRIPTIONS = {
     ALARM_DATA_STALE: (
         "Live data from the plant has stopped updating. The MQTT data link or "
         "publisher may be down."
+    ),
+    ALARM_TANK_OVERFLOW: (
+        f"Raw tank level has exceeded {TANK_CRITICAL_HIGH:.0f}%. Risk of overflow. "
+        "Inlet valve should be closed and feed pump stopped immediately."
+    ),
+    ALARM_TANK_EMPTY: (
+        f"Raw tank level has dropped below {TANK_CRITICAL_LOW:.0f}%. Risk of "
+        "dry-running the feed pump and pasteurizer. Inlet valve should be opened "
+        "and feed pump stopped."
     ),
 }
 
@@ -134,6 +151,7 @@ NUMERIC_TAGS = [
     "flow_rate",
     "bottle_count",
     "heater_power_cmd",
+    "cooling_valve_cmd",
 ]
 
 # ---------------------------------------------------------------------------
@@ -149,6 +167,14 @@ import tempfile, os as _os
 DB_PATH = _os.path.join(tempfile.gettempdir(), "historian.db")  # SQLite historian (works on Streamlit Cloud)
 CSV_EXPORT_PATH = _os.path.join(tempfile.gettempdir(), "history_export.csv")
 HISTORY_WINDOW_S = 300                # default trend window shown on the dashboard
+
+# ---------------------------------------------------------------------------
+# 9. Shared utility
+# ---------------------------------------------------------------------------
+def clamp(value: float, low: float, high: float) -> float:
+    """Clamp a value between low and high bounds (shared by M1 and M2)."""
+    return max(low, min(high, value))
+
 
 # Anthropic / Claude settings for the AI assistant (M5).
 # The API key is read from the ANTHROPIC_API_KEY environment variable; if it is

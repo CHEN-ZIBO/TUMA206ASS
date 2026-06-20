@@ -50,6 +50,8 @@ class PLCController:
     _temp_stuck_count: int = field(default=0, repr=False)
     _no_flow_count: int = field(default=0, repr=False)
     _temp_range_count: int = field(default=0, repr=False)
+    _tank_overflow_count: int = field(default=0, repr=False)
+    _tank_empty_count: int = field(default=0, repr=False)
     _prev_temp: float = field(default=-999.0, repr=False)
     # True once the pasteurizer has reached the safe band at least once.
     _warmed_up: bool = field(default=False, repr=False)
@@ -68,6 +70,8 @@ class PLCController:
         self._temp_stuck_count = 0
         self._no_flow_count = 0
         self._temp_range_count = 0
+        self._tank_overflow_count = 0
+        self._tank_empty_count = 0
         self._prev_temp = -999.0
         self._warmed_up = False
         self._prev_state = config.PLC_IDLE
@@ -109,7 +113,9 @@ class PLCController:
         serious = self.alarm_code in (config.ALARM_PUMP_NO_FLOW,
                                        config.ALARM_TEMP_OUT_OF_RANGE,
                                        config.ALARM_SENSOR_TEMP_STUCK,
-                                       config.ALARM_DATA_STALE)
+                                       config.ALARM_DATA_STALE,
+                                       config.ALARM_TANK_OVERFLOW,
+                                       config.ALARM_TANK_EMPTY)
         if serious:
             self.state = config.PLC_FAULT
             running = False
@@ -138,17 +144,18 @@ class PLCController:
 
         if operator_start and self.state == config.PLC_IDLE:
             self.state = config.PLC_STARTING
+            # Pre-charge pump accumulator so it doesn't start from 0
+            self.pump_cmd = 70.0
         elif self.state == config.PLC_STARTING:
             self.state = config.PLC_RUNNING
 
     # ------------------------------------------------------------------
     def _fast_recovery_init(self) -> None:
-        """Reset accumulators on FAULT→IDLE so auto mode starts from a
-        clean slate and converges quickly to setpoints."""
-        # Don't fully reset — keep some memory for faster convergence
-        self.heater_power_cmd = max(0.0, self.heater_power_cmd - 20.0)
-        self.cooling_valve_cmd = max(0.0, self.cooling_valve_cmd - 10.0)
-        self.pump_cmd = 70.0  # start pump at reasonable speed
+        """Reset accumulators on FAULT→IDLE for clean auto restart.
+        Heater and cooler get partial reset; pump is pre-charged
+        when START is pressed (see _update_state)."""
+        self.heater_power_cmd = self.heater_power_cmd * 0.6
+        self.cooling_valve_cmd = self.cooling_valve_cmd * 0.4
         self._fill_timer = 0
 
     # ------------------------------------------------------------------
@@ -173,18 +180,22 @@ class PLCController:
         man_conv   = "conveyor_cmd" in man
         man_fill   = "fill_valve_cmd" in man
 
-        # ── S1: Inlet Valve ─────────────────────────────────────────
+        # ── S1: Inlet Valve (proportional) ──────────────────────────
         if man_inlet:
             inlet_valve_cmd = float(man["inlet_valve_cmd"])
         else:
-            # Auto: hysteresis control on tank level (0-100% proportional)
-            if tank_level < config.TANK_LEVEL_LOW:
+            # Proportionally controlled inlet valve centered on target=55%.
+            # Full open (100%) at or below TANK_LEVEL_LOW (30%),
+            # fully closed (0%) at or above TANK_LEVEL_HIGH (80%),
+            # linear interpolation in between.
+            if tank_level <= config.TANK_LEVEL_LOW:
                 inlet_valve_cmd = 100.0
             elif tank_level >= config.TANK_LEVEL_HIGH:
                 inlet_valve_cmd = 0.0
             else:
-                # In the hysteresis band: hold previous state
-                inlet_valve_cmd = 100.0 if tank_level < (config.TANK_LEVEL_LOW + config.TANK_LEVEL_HIGH) / 2 else 0.0
+                # Scale linearly: at 30%→100% open, at 80%→0% open
+                band = config.TANK_LEVEL_HIGH - config.TANK_LEVEL_LOW
+                inlet_valve_cmd = 100.0 * (1.0 - (tank_level - config.TANK_LEVEL_LOW) / band)
 
         # ── S1: Feed Pump ───────────────────────────────────────────
         if man_pump:
@@ -212,35 +223,40 @@ class PLCController:
                     0.0, 100.0)
             pump_cmd = self.pump_cmd
 
-        # ── S2: Heater ──────────────────────────────────────────────
+        # ── S2: Heater (PI with anti-windup) ──────────────────────
         if man_heater:
             heater_power_cmd = float(man["heater_power_cmd"])
             self.heater_power_cmd = heater_power_cmd
         else:
-            # Auto: proportional control toward 72°C setpoint
             error = config.PASTEUR_SETPOINT - pasteur_temp
-            # Adaptation: if pump is manual and very high (more flow = more cooling),
-            # increase heater gain to compensate
             gain = 4.0
             if man_pump:
                 manual_flow = float(man["pump_cmd"])
                 if manual_flow > 70:
-                    gain = 5.5  # more aggressive heating for high flow
+                    gain = 5.5
                 elif manual_flow < 30:
-                    gain = 2.5  # gentler heating for low flow (avoid overshoot)
-            self.heater_power_cmd = _clamp(
-                self.heater_power_cmd + gain * error, 0.0, 100.0)
+                    gain = 2.5
+            # Conditional integration: block only if already at limit AND
+            # error would push further into saturation (true anti-windup)
+            candidate = self.heater_power_cmd + gain * error
+            sat_high = self.heater_power_cmd >= 100.0 and error > 0
+            sat_low  = self.heater_power_cmd <= 0.0 and error < 0
+            if not sat_high and not sat_low:
+                self.heater_power_cmd = _clamp(candidate, 0.0, 100.0)
             heater_power_cmd = round(self.heater_power_cmd, 1)
 
-        # ── S3: Cooler ──────────────────────────────────────────────
+        # ── S3: Cooler (PI with anti-windup) ──────────────────────
         if man_cool:
             cooling_valve_cmd = float(man["cooling_valve_cmd"])
             self.cooling_valve_cmd = cooling_valve_cmd
         else:
             cool_error = cooler_temp - config.COOLER_SETPOINT
             cool_gain = 4.0
-            self.cooling_valve_cmd = _clamp(
-                self.cooling_valve_cmd + cool_gain * cool_error, 0.0, 100.0)
+            candidate = self.cooling_valve_cmd + cool_gain * cool_error
+            sat_high = self.cooling_valve_cmd >= 100.0 and cool_error > 0
+            sat_low  = self.cooling_valve_cmd <= 0.0 and cool_error < 0
+            if not sat_high and not sat_low:
+                self.cooling_valve_cmd = _clamp(candidate, 0.0, 100.0)
             cooling_valve_cmd = round(self.cooling_valve_cmd, 1)
 
         # ── S4/S5: Bottling readiness ────────────────────────────────
@@ -345,12 +361,16 @@ class PLCController:
         else:
             self._temp_range_count = 0
 
-        # Tank level critical protection: if level drops to 0, stop the pump
-        # to prevent dry-running damage. This is a hard safety interlock.
-        if running and tank_level <= 0.5 and self.last_pump_cmd > 0:
-            # Tank is empty while pump was running — immediate alarm
-            if self.alarm_code == config.ALARM_NONE:
-                self.alarm_code = config.ALARM_TEMP_OUT_OF_RANGE  # fallback
+        # Tank level alarms: overflow (too full) or empty (too low).
+        if running and tank_level >= config.TANK_CRITICAL_HIGH:
+            self._tank_overflow_count += 1
+        else:
+            self._tank_overflow_count = 0
+
+        if running and tank_level <= config.TANK_CRITICAL_LOW:
+            self._tank_empty_count += 1
+        else:
+            self._tank_empty_count = 0
 
         # Auto-clear TEMP_OUT_OF_RANGE when temperature returns to safe band.
         if self.alarm_code == config.ALARM_TEMP_OUT_OF_RANGE and not out_of_range:
@@ -367,6 +387,10 @@ class PLCController:
                 self.alarm_code = config.ALARM_SENSOR_TEMP_STUCK
             elif self._temp_range_count >= config.ALARM_DEBOUNCE_TICKS:
                 self.alarm_code = config.ALARM_TEMP_OUT_OF_RANGE
+            elif self._tank_overflow_count >= config.ALARM_DEBOUNCE_TICKS:
+                self.alarm_code = config.ALARM_TANK_OVERFLOW
+            elif self._tank_empty_count >= config.ALARM_DEBOUNCE_TICKS:
+                self.alarm_code = config.ALARM_TANK_EMPTY
 
         self._prev_temp = pasteur_temp
 
@@ -377,9 +401,10 @@ class PLCController:
         self._temp_stuck_count = 0
         self._no_flow_count = 0
         self._temp_range_count = 0
+        self._tank_overflow_count = 0
+        self._tank_empty_count = 0
         if self.state == config.PLC_FAULT:
             self.state = config.PLC_IDLE
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+from config import clamp as _clamp  # shared utility

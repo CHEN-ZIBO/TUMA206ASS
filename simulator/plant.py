@@ -36,6 +36,8 @@ class PlantSimulator:
     flow_rate: float = 0.0         # L/min
     bottle_present: int = 0        # 0/1
     bottle_count: int = 0          # bottles capped so far
+    conveyor_queue: int = 0        # bottles currently on the conveyor belt
+    conveyor_max: int = config.CONVEYOR_MAX_BOTTLES  # max belt capacity
     pump_feedback: int = 0         # 0/1 - real pump running confirmation
     valve_feedback: int = 0        # 0/1 - inlet valve open confirmation
 
@@ -57,6 +59,7 @@ class PlantSimulator:
         self.flow_rate = 0.0
         self.bottle_present = 0
         self.bottle_count = 0
+        self.conveyor_queue = 0
         self.pump_feedback = 0
         self.valve_feedback = 0
         self.fault_status = config.FAULT_NONE
@@ -185,10 +188,18 @@ class PlantSimulator:
             if self._fill_timer >= config.FILL_DURATION_TICKS:
                 self._bottle_filled = 1
 
-        # Capping & counting: a filled bottle that gets capped is counted once.
+        # Capping & counting: a filled bottle that gets capped enters the conveyor queue.
         if self._bottle_filled and capper_cmd and not self._bottle_capped:
-            self.bottle_count += 1
-            self._bottle_capped = 1
+            if self.conveyor_queue < self.conveyor_max:
+                self.bottle_count += 1
+                self.conveyor_queue += 1
+                self._bottle_capped = 1
+
+        # Conveyor discharge: bottles exit the belt at a rate proportional to speed.
+        # At 100% speed, 1 bottle exits every BOTTLE_CYCLE_TICKS ticks.
+        discharge_interval = max(1, int(config.BOTTLE_CYCLE_TICKS * 100.0 / max(conveyor_cmd, 20)))
+        if self._station_timer % discharge_interval == 0 and self.conveyor_queue > 0:
+            self.conveyor_queue -= 1
 
     # ------------------------------------------------------------------
     def stage_state(self) -> str:
@@ -210,6 +221,8 @@ class PlantSimulator:
             "flow_rate": round(self.flow_rate, 2),
             "bottle_present": int(self.bottle_present),
             "bottle_count": int(self.bottle_count),
+            "conveyor_queue": int(self.conveyor_queue),
+            "conveyor_max": int(self.conveyor_max),
             "pump_feedback": int(self.pump_feedback),
             "valve_feedback": int(self.valve_feedback),
             "stage_state": self.stage_state(),
@@ -217,5 +230,4 @@ class PlantSimulator:
         }
 
 
-def _clamp(value: float, low: float, high: float) -> float:
-    return max(low, min(high, value))
+from config import clamp as _clamp  # shared utility

@@ -44,7 +44,7 @@ COOLER_MAX_BOTTLING = 25.0     # degC — do NOT bottle when cooler_temp exceeds
 
 FILL_DURATION_TICKS = 3        # ticks needed to fill one bottle
 BOTTLE_CYCLE_TICKS = 6         # ticks per bottle at the filling station (incl. gap)
-CONVEYOR_MAX_BOTTLES = 8       # max bottles that can be queued on the conveyor belt
+CONVEYOR_MAX_BOTTLES = 24      # max bottles that can be queued on the conveyor belt
 AMBIENT_TEMP = 25.0            # degC ambient temperature
 
 # Number of consecutive abnormal ticks before the PLC latches an alarm.

@@ -36,6 +36,7 @@ class PlantSimulator:
     flow_rate: float = 0.0         # L/min
     bottle_present: int = 0        # 0/1
     bottle_count: int = 0          # bottles capped so far
+    bottles_completed: int = 0     # bottles that exited the conveyor (finished)
     conveyor_queue: int = 0        # bottles currently on the conveyor belt
     conveyor_max: int = config.CONVEYOR_MAX_BOTTLES  # max belt capacity
     pump_feedback: int = 0         # 0/1 - real pump running confirmation
@@ -48,6 +49,7 @@ class PlantSimulator:
     # --- helpers for discrete events (bottling line) ---
     _fill_timer: int = field(default=0, repr=False)
     _station_timer: int = field(default=0, repr=False)
+    _discharge_timer: int = field(default=0, repr=False)
     _bottle_filled: int = field(default=0, repr=False)
     _bottle_capped: int = field(default=0, repr=False)
 
@@ -59,12 +61,14 @@ class PlantSimulator:
         self.flow_rate = 0.0
         self.bottle_present = 0
         self.bottle_count = 0
+        self.bottles_completed = 0
         self.conveyor_queue = 0
         self.pump_feedback = 0
         self.valve_feedback = 0
         self.fault_status = config.FAULT_NONE
         self._fill_timer = 0
         self._station_timer = 0
+        self._discharge_timer = 0
         self._bottle_filled = 0
         self._bottle_capped = 0
 
@@ -181,11 +185,13 @@ class PlantSimulator:
 
         self.bottle_present = 1
 
-        # Filling: accumulate while the fill valve is open and the bottle is not
-        # yet full. After FILL_DURATION_TICKS the bottle is considered filled.
+        # Filling: higher flow = faster fill. At 40 L/min, 3 ticks to fill.
+        # At lower flow, filling takes proportionally longer.
+        fr = max(self.flow_rate, 5.0)
+        dyn_fill = max(2, min(8, round(config.FILL_DURATION_TICKS * 40.0 / fr)))
         if fill_valve_cmd and not self._bottle_filled:
             self._fill_timer += 1
-            if self._fill_timer >= config.FILL_DURATION_TICKS:
+            if self._fill_timer >= dyn_fill:
                 self._bottle_filled = 1
 
         # Capping & counting: a filled bottle that gets capped enters the conveyor queue.
@@ -195,11 +201,14 @@ class PlantSimulator:
                 self.conveyor_queue += 1
                 self._bottle_capped = 1
 
-        # Conveyor discharge: bottles exit the belt at a rate proportional to speed.
-        # At 100% speed, 1 bottle exits every BOTTLE_CYCLE_TICKS ticks.
+        # Conveyor discharge: independent discharge timer, rate proportional to speed.
+        # At 100% conveyor, 1 bottle exits every BOTTLE_CYCLE_TICKS ticks.
         discharge_interval = max(1, int(config.BOTTLE_CYCLE_TICKS * 100.0 / max(conveyor_cmd, 20)))
-        if self._station_timer % discharge_interval == 0 and self.conveyor_queue > 0:
+        self._discharge_timer += 1
+        if self._discharge_timer >= discharge_interval and self.conveyor_queue > 0:
+            self._discharge_timer = 0
             self.conveyor_queue -= 1
+            self.bottles_completed += 1
 
     # ------------------------------------------------------------------
     def stage_state(self) -> str:
@@ -221,6 +230,7 @@ class PlantSimulator:
             "flow_rate": round(self.flow_rate, 2),
             "bottle_present": int(self.bottle_present),
             "bottle_count": int(self.bottle_count),
+            "bottles_completed": int(self.bottles_completed),
             "conveyor_queue": int(self.conveyor_queue),
             "conveyor_max": int(self.conveyor_max),
             "pump_feedback": int(self.pump_feedback),

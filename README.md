@@ -22,10 +22,13 @@ Press **START**, watch the process flow diagram update live. Inject faults from 
 |------|----|----|
 | Actuator control | Mixed binary (on/off) + float | **All proportional 0-100%** (inlet valve, pump, heater, cooling, conveyor) |
 | Manual override | Global auto/manual toggle | **Per-actuator independent override** — PLC adapts remaining auto actuators |
+| Manual→auto transition | Jump to preset value | **Smooth gradient recovery** — accumulator stays at manual value, auto converges within 3 ticks; debounce counters reset to prevent false FAULT |
+| Slider init on manual check | Always starts at 0% | **Starts from current auto value** — snapshots live engine value when checkbox is first ticked |
 | Fault detection | TEMP_OUT_OF_RANGE skipped when heater manual | **All faults detected always** — safety never bypassed |
-| Heater/Cooler control | Simple integral with clamping (windup possible) | **PI with true anti-windup** — blocks accumulation only when saturated |
+| Heater/Cooler control | Simple integral + clamping (windup, oscillation) | **PI with anti-windup + tuned gains** — Kp=1.5 (smooth, no sawtooth) |
 | Tank level alarm | None | **TANK_OVERFLOW (95%) + TANK_EMPTY (5%)** — stops line on critical levels |
-| Conveyor model | Bottle count only | **Queue model** — bottles enter belt, exit at speed-proportional rate, max capacity guard |
+| Conveyor model | Bottle count only | **Queue model** — bottles enter belt, exit via independent discharge timer, `bottles_completed` output counter, max capacity 24 |
+| Flow→Fill→Conveyor link | Fixed timings (3t fill, 6t cycle) | **Dynamic chain**: pump speed → flow rate → fill duration (2-8t) → conveyor speed (25-100%) |
 | Fast recovery | Manual offsets | Proportional reset on FAULT clear; pump pre-charged at 70% on START |
 
 ### Dashboard
@@ -110,8 +113,9 @@ module M1_PlantSimulator (
     output flow_rate,
     output bottle_present,
     output bottle_count,
+    output bottles_completed,     // bottles that exited the conveyor (finished production)
     output conveyor_queue,        // bottles currently on belt
-    output conveyor_max,          // max belt capacity
+    output conveyor_max,          // max belt capacity (24)
     output pump_feedback,
     output valve_feedback,
     output stage_state,
@@ -154,20 +158,33 @@ flowchart LR
     FP --> S2[S2 Pasteurizer\nSetpoint: 72 degC\nSafe: 68-78 degC]
     S2 --> S3[S3 Cooler\nTarget: 20 degC\nMax bottling: 25 degC]
     S3 --> S4[S4 Filler\nFill: 3 ticks\nCycle: 6 ticks/bottle]
-    S4 --> S5[S5 Capper/Conveyor\nQueue: 0-8 bottles\nSpeed: 0-100%]
-    S5 --> OUT[Output]
+    S4 --> S5[S5 Capper/Conveyor\nQueue: 0-24 bottles\nSpeed: 25-100%]
+    S5 --> OUT[Output\nbottles_completed]
 ```
 
 ## Control Strategies
 
 | Stage | Method | Details |
 |---|---|---|
-| S1 Inlet Valve | Proportional (P) | Target 50%, gain=5. Full open at <=30%, full close at >=80% |
-| S1 Feed Pump | Proportional (P) | Speed proportional to tank level: 30% at low, 100% at high |
-| S2 Pasteurizer | PI + anti-windup | Setpoint 72 degC, Kp=4.0. Gain adapts to manual pump override (2.5-5.5) |
-| S3 Cooler | PI + anti-windup | Target 20 degC, Kp=4.0. Integrated cooling valve 0-100% |
-| S4 Filler | Timer | 3-tick fill valve open when bottle present AND process ready |
-| S5 Conveyor | Proportional | Speed 0-100%, cycle inversely proportional. Bottling only when pasteurized AND cooled |
+| S1 Inlet Valve | Proportional (P) | Target 50%, gain=2.0 (smooth, no oscillation). Full open at <=30%, full close at >=80% |
+| S1 Feed Pump | Proportional (P) | Speed proportional to tank level: 30% at low, 100% at high. Smoothing factor 0.4 |
+| S2 Pasteurizer | PI + anti-windup | Setpoint 72 degC, Kp=1.5. Gain adapts to manual pump override (1.0-2.5). Anti-windup: blocks only when saturated + error pushes deeper |
+| S3 Cooler | PI + anti-windup | Target 20 degC, Kp=1.5. Anti-windup same as heater |
+| S4 Filler | Flow-dependent timer | `fill_needed = clamp(FILL_DURATION_TICKS * 40 / flow_rate, 2, 8)`. At 40 L/min: 3t fill; at 20 L/min: 6t fill |
+| S5 Conveyor | Flow-matched proportional | `conveyor_cmd = clamp(100 * FILL_DURATION_TICKS / fill_needed, 25, 100)`. Bottling only when pasteurized AND cooled |
+
+### Flow→Fill→Conveyor Speed Chain
+
+Pump speed determines flow rate, which determines how fast each bottle fills. Conveyor speed matches the fill pace:
+
+| Pump % | Flow (L/min) | Fill (ticks) | Conveyor (%) | Bottles/min |
+|--------|-------------|-------------|-------------|------------|
+| 100% | ~40 | 3 | 100% | ~10 |
+| 68% | ~27 | 4-5 | 60-75% | ~6-8 |
+| 50% | ~20 | 6 | 50% | ~5 |
+| 33% | ~13 | 8 | 38%→25% | ~3 |
+
+Formula: `fill_needed = clamp(3 * 40 / flow_rate, 2, 8)`, `conveyor = clamp(100 * 3 / fill_needed, 25, 100)`
 
 ## Fault Injection and Alarm Codes
 
@@ -180,6 +197,21 @@ flowchart LR
 | 4 | Data link stale | DATA_STALE (40) | Instant | tags frozen, dashboard shows last values |
 | — | Tank >95% | TANK_OVERFLOW (50) | 3 ticks | Overflow risk → FAULT |
 | — | Tank <5% | TANK_EMPTY (51) | 3 ticks | Dry-run risk → FAULT |
+
+## Conveyor Output Model
+
+Bottles flow through S5 in three stages tracked by separate counters:
+
+| Counter | Meaning | When Incremented |
+|---------|---------|-----------------|
+| `bottle_count` | Total bottles capped (entered conveyor) | On capping |
+| `conveyor_queue` | Bottles currently on the belt (0-24) | +1 on capping, -1 on discharge |
+| `bottles_completed` | Finished bottles that exited the line | On discharge from belt |
+
+Discharge uses an independent timer (not coupled to the bottle station cycle):
+- At 100% conveyor: 1 bottle exits every `BOTTLE_CYCLE_TICKS` (6) ticks
+- At 50% conveyor: 1 bottle exits every 12 ticks
+- Queue full (24 bottles) → upstream capping pauses until space frees
 
 ### Manual-Override Induced Faults
 
@@ -234,9 +266,9 @@ requirements.txt
 | PASTEUR_SAFE_MIN / MAX | 68 / 78 degC | Safe temperature band |
 | COOLER_SETPOINT | 20 degC | Cooling target |
 | COOLER_MAX_BOTTLING | 25 degC | No bottling above this |
-| CONVEYOR_MAX_BOTTLES | 8 | Max bottles on belt |
+| CONVEYOR_MAX_BOTTLES | 24 | Max bottles on belt |
 | ALARM_DEBOUNCE_TICKS | 3 | Consecutive abnormal ticks to latch alarm |
-| FILL_DURATION_TICKS | 3 | Fill valve open duration |
+| FILL_DURATION_TICKS | 3 | Nominal fill duration at 40 L/min; dynamically scaled 2-8 ticks by flow rate |
 | BOTTLE_CYCLE_TICKS | 6 | Bottle cycle length at 100% speed |
 
 ## Demo Plan
@@ -250,11 +282,15 @@ requirements.txt
    - `2` Feed pump failure → PUMP_NO_FLOW → FAULT
    - `3` Temperature excursion → TEMP_OUT_OF_RANGE → FAULT (auto-clears on recovery)
    - `4` Data link stale → DATA_STALE → dashboard freezes
-6. Toggle per-actuator manual override to cause faults:
-   - Set Inlet Valve to 100% and Feed Pump to 0% → tank overfills → TANK_OVERFLOW
-   - Set Heater to 0% → temp drops → TEMP_OUT_OF_RANGE
-7. Press **RESET** then **START** to recover (all manuals cleared)
-8. Export CSV from TRENDS page for evidence
-9. Switch to ALARMS page to review alarm event log and AI recommendations
+6. Toggle per-actuator manual override:
+   - Check any actuator → slider starts at **current auto value** (not 0%)
+   - Adjust slider → actuator responds immediately
+   - Uncheck → **smooth gradient return** to auto within 3 ticks (debounce counters reset)
+   - Set Inlet Valve 100% + Feed Pump 0% → tank overfills → TANK_OVERFLOW
+   - Set Heater 0% → temp drops → TEMP_OUT_OF_RANGE
+7. Press **RESET** then **START** to recover (all manuals cleared, line restarts in full AUTO)
+8. Observe SCHEMATIC page: `bottles_completed` counts finished output at S5 exit
+9. Export CSV from TRENDS page for evidence (smooth curves, no sawtooth oscillation)
+10. Switch to ALARMS page to review alarm event log and AI recommendations (sensor-fingerprint cache)
 
 > Advanced: set `USE_MQTT=1` for real MQTT broker; run `uvicorn backend.api:app` for REST/WebSocket API.

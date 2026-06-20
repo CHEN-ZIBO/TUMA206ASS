@@ -174,6 +174,7 @@ class PLCController:
         tank_level = float(sensors.get("tank_level", 50.0))
         pasteur_temp = float(sensors.get("pasteur_temp", 25.0))
         cooler_temp = float(sensors.get("cooler_temp", 25.0))
+        flow_rate = float(sensors.get("flow_rate", 40.0))
 
         # Track manual→auto transitions: reset related debounce counters
         # so auto has time to recover before faults re-trigger.
@@ -203,9 +204,9 @@ class PLCController:
             elif tank_level >= config.TANK_LEVEL_HIGH:
                 inlet_valve_cmd = 0.0
             else:
-                # P-controller with gain=4: 50% open at target, 100% at 30%, 0% at 80%
+                # P-controller: 50% open at target, gentle gain avoids sawtooth
                 error = tank_level - config.TANK_LEVEL_TARGET
-                inlet_valve_cmd = _clamp(50.0 - 5.0 * error, 0.0, 100.0)
+                inlet_valve_cmd = _clamp(50.0 - 2.0 * error, 0.0, 100.0)
 
         # ── S1: Feed Pump ───────────────────────────────────────────
         if man_pump:
@@ -231,7 +232,7 @@ class PLCController:
                     else:
                         frac = (tank_level - config.TANK_LEVEL_LOW) / (config.TANK_LEVEL_HIGH - config.TANK_LEVEL_LOW)
                         target_pump = 30.0 + 70.0 * frac
-                self.pump_cmd += 8.0 * (target_pump - self.pump_cmd) / 100.0 * 20.0
+                self.pump_cmd += 0.4 * (target_pump - self.pump_cmd)
                 self.pump_cmd = _clamp(self.pump_cmd, 0.0, 100.0)
             pump_cmd = self.pump_cmd
 
@@ -241,13 +242,13 @@ class PLCController:
             self.heater_power_cmd = heater_power_cmd
         else:
             error = config.PASTEUR_SETPOINT - pasteur_temp
-            gain = 4.0
+            gain = 1.5
             if man_pump:
                 manual_flow = float(man["pump_cmd"])
                 if manual_flow > 70:
-                    gain = 5.5
-                elif manual_flow < 30:
                     gain = 2.5
+                elif manual_flow < 30:
+                    gain = 1.0
             # Conditional integration: block only if already at limit AND
             # error would push further into saturation (true anti-windup)
             candidate = self.heater_power_cmd + gain * error
@@ -263,13 +264,21 @@ class PLCController:
             self.cooling_valve_cmd = cooling_valve_cmd
         else:
             cool_error = cooler_temp - config.COOLER_SETPOINT
-            cool_gain = 4.0
+            cool_gain = 1.5
             candidate = self.cooling_valve_cmd + cool_gain * cool_error
             sat_high = self.cooling_valve_cmd >= 100.0 and cool_error > 0
             sat_low  = self.cooling_valve_cmd <= 0.0 and cool_error < 0
             if not sat_high and not sat_low:
                 self.cooling_valve_cmd = _clamp(candidate, 0.0, 100.0)
             cooling_valve_cmd = round(self.cooling_valve_cmd, 1)
+
+        # ── Dynamic fill duration: higher flow = faster fill ────────
+        # Nominal: FILL_DURATION_TICKS (3) at 40 L/min (100% pump)
+        # At lower flow, filling takes proportionally longer.
+        if flow_rate > 5:
+            fill_needed = max(2, min(8, round(config.FILL_DURATION_TICKS * 40.0 / flow_rate)))
+        else:
+            fill_needed = 8
 
         # ── S4/S5: Bottling readiness ────────────────────────────────
         pasteurized = pasteur_temp >= config.PASTEUR_SAFE_MIN
@@ -281,16 +290,20 @@ class PLCController:
             fill_valve_cmd = int(man["fill_valve_cmd"])
         else:
             if bottle_present and ready:
-                self._fill_timer = config.FILL_DURATION_TICKS
+                self._fill_timer = fill_needed
             fill_valve_cmd = 1 if (self._fill_timer > 0 and ready) else 0
             if self._fill_timer > 0:
                 self._fill_timer -= 1
 
-        # ── S5: Conveyor ─────────────────────────────────────────────
+        # ── S5: Conveyor speed matches fill rate ─────────────────────
         if man_conv:
             conveyor_cmd = float(man["conveyor_cmd"])
         else:
-            conveyor_cmd = 100.0 if ready else 0.0
+            if ready:
+                base = 100.0 * config.FILL_DURATION_TICKS / max(1, fill_needed)
+                conveyor_cmd = _clamp(base, 25.0, 100.0)
+            else:
+                conveyor_cmd = 0.0
 
         # Capper follows conveyor
         capper_cmd = 1 if conveyor_cmd > 0 else 0

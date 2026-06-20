@@ -423,7 +423,7 @@ def live_view():
         ("pipe",),
         ("FILLER", "FILLING" if s4_ok else "IDLE", f"Valve {'ON' if fc else 'OFF'}", "active" if s4_ok else ("warn" if bp else "idle"), False),
         ("pipe",),
-        ("CAPPER", f"{bc}", f"{belt}/{belt_max} on belt", "active" if s5_ok else "idle", 'conveyor_cmd' in man),
+        ("CAPPER", f"{bc}", f"Done: {latest.get('bottles_completed',0)}", "active" if s5_ok else "idle", 'conveyor_cmd' in man),
     ]
 
     for col, item in zip(cols, items):
@@ -463,9 +463,9 @@ def live_view():
          f"{config.FILL_DURATION_TICKS} ticks fill &middot; {config.BOTTLE_CYCLE_TICKS} ticks/bottle"),
         ("S5", "CAPPER", "RUNNING" if s5_ok else "STOPPED",
          GREEN if s5_ok else TEXT_DIM,
-         [("Capped", str(bc)), ("On Belt", f"{belt}/{belt_max}"),
+         [("In Queue", f"{belt}/{belt_max}"), ("Completed", str(latest.get("bottles_completed",0))),
           ("Conveyor", f"{cvc:.0f}%"), ("Capper", "ON" if cvc>0 else "OFF")],
-         f"Queue {belt}/{belt_max} &middot; {config.BOTTLE_CYCLE_TICKS} ticks/bottle"),
+         f"Output: {latest.get('bottles_completed',0)} total &middot; {config.BOTTLE_CYCLE_TICKS} ticks/bottle"),
     ]
     for col, (sid, nm, stt, clr, rows, req) in zip(sc, cards):
         col.markdown(stage_card(sid, nm, stt, clr, rows, req), unsafe_allow_html=True)
@@ -477,7 +477,7 @@ def live_view():
     kc[1].markdown(kpi_card("PASTEUR", f"{temp:.1f}", "°C", GREEN if s2_ok else RED, f"SP {config.PASTEUR_SETPOINT:.0f}°C"), unsafe_allow_html=True)
     kc[2].markdown(kpi_card("COOLER", f"{cool:.1f}", "°C", CYAN if s3_ok else ORANGE, f"Tgt {config.COOLER_SETPOINT:.0f}°C"), unsafe_allow_html=True)
     kc[3].markdown(kpi_card("FLOW", f"{flow:.1f}", "L/min", GREEN if flow>0 else TEXT_DIM, f"Pump {pc:.0f}%"), unsafe_allow_html=True)
-    kc[4].markdown(kpi_card("BOTTLES", str(bc), "", CYAN if bc>0 else TEXT_DIM, f"Belt {belt}/{belt_max}"), unsafe_allow_html=True)
+    kc[4].markdown(kpi_card("COMPLETED", str(latest.get("bottles_completed",0)), "", CYAN if latest.get("bottles_completed",0)>0 else TEXT_DIM, f"In Queue: {belt}"), unsafe_allow_html=True)
     kc[5].markdown(kpi_card("PLC", plc_state, "", GREEN if plc_state=="RUNNING" else (RED if plc_state=="FAULT" else ORANGE), f"Tick {latest.get('tick',0)}"), unsafe_allow_html=True)
 
 

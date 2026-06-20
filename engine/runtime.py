@@ -59,6 +59,8 @@ class SimulationEngine:
         with self._lock:
             self._operator_start = 1
             self._operator_stop = 0
+            # Clear all manual overrides on START — return to full AUTO
+            self._manual_overrides.clear()
 
     def stop_line(self) -> None:
         with self._lock:
@@ -144,14 +146,11 @@ class SimulationEngine:
         sensors_for_plc["operator_start"] = operator_start
         sensors_for_plc["operator_stop"] = operator_stop
         sensors_for_plc["data_stale_flag"] = data_stale_flag
-        # --- Apply any manual actuator overrides (operator bypasses PLC) ---
+        # Pass manual override values directly — PLC uses them as fixed outputs
+        # and adapts remaining auto actuators around them.
         with self._lock:
             overrides = dict(self._manual_overrides)
-        control = self.plc.step(sensors_for_plc,
-                                manual_actuators=set(overrides.keys()))
-        for act_name, act_val in overrides.items():
-            if act_name in control:
-                control[act_name] = act_val
+        control = self.plc.step(sensors_for_plc, manual_overrides=overrides)
 
         # --- M1 applies the actuator commands + fault injection ---
         plant_cmd = dict(control)

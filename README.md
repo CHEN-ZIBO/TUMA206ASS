@@ -25,7 +25,9 @@ Press **START**, watch the process flow diagram update live. Inject faults from 
 | Manual→auto transition | Jump to preset value | **Smooth gradient recovery** — accumulator stays at manual value, auto converges within 3 ticks; debounce counters reset to prevent false FAULT |
 | Slider init on manual check | Always starts at 0% | **Starts from current auto value** — snapshots live engine value when checkbox is first ticked |
 | Fault detection | TEMP_OUT_OF_RANGE skipped when heater manual | **All faults detected always** — safety never bypassed |
+| Thermal model | Fast response (0.20/0.25 time constant, ±0.08 noise) | **Industrial inertia** (0.05/0.08 time constant, ±0.02 noise) — realistic slow heating/cooling, smooth trend curves |
 | Heater/Cooler control | Simple integral + clamping (windup, oscillation) | **PI with anti-windup + tuned gains** — Kp=1.5 (smooth, no sawtooth) |
+| Filler model | Single fill head | **4-lane rotary filler** — parallel heads with individual detection/fill/done states |
 | Tank level alarm | None | **TANK_OVERFLOW (95%) + TANK_EMPTY (5%)** — stops line on critical levels |
 | Conveyor model | Bottle count only | **Queue model** — bottles enter belt, exit via independent discharge timer, `bottles_completed` output counter, max capacity 24 |
 | Flow→Fill→Conveyor link | Fixed timings (3t fill, 6t cycle) | **Dynamic chain**: pump speed → flow rate → fill duration (2-8t) → conveyor speed (25-100%) |
@@ -170,8 +172,8 @@ flowchart LR
 | S1 Feed Pump | Proportional (P) | Speed proportional to tank level: 30% at low, 100% at high. Smoothing factor 0.4 |
 | S2 Pasteurizer | PI + anti-windup | Setpoint 72 degC, Kp=1.5. Gain adapts to manual pump override (1.0-2.5). Anti-windup: blocks only when saturated + error pushes deeper |
 | S3 Cooler | PI + anti-windup | Target 20 degC, Kp=1.5. Anti-windup same as heater |
-| S4 Filler | Flow-dependent timer | `fill_needed = clamp(FILL_DURATION_TICKS * 40 / flow_rate, 2, 8)`. At 40 L/min: 3t fill; at 20 L/min: 6t fill |
-| S5 Conveyor | Flow-matched proportional | `conveyor_cmd = clamp(100 * FILL_DURATION_TICKS / fill_needed, 25, 100)`. Bottling only when pasteurized AND cooled |
+| S4 Filler | **4-lane rotary** + flow-dependent timer | 4 parallel fill heads. Each: detect→fill→done. `fill_needed = clamp(FILL_DURATION_TICKS * 40 / flow_rate, 2, 8)`. Bottles assigned round-robin to first available lane |
+| S5 Conveyor | Flow-matched proportional + discharge timer | `conveyor_cmd = clamp(100 * FILL_DURATION_TICKS / fill_needed, 25, 100)`. Independent discharge timer: 1 bottle exits per cycle. Queue max 24 |
 
 ### Flow→Fill→Conveyor Speed Chain
 

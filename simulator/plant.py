@@ -24,6 +24,8 @@ from typing import Dict
 
 import config
 
+FILL_LANES = 4  # parallel filling heads (industrial rotary filler)
+
 
 @dataclass
 class PlantSimulator:
@@ -46,11 +48,15 @@ class PlantSimulator:
     fault_status: int = config.FAULT_NONE
     _frozen_temp: float = field(default=0.0, repr=False)
 
+    # --- multi-lane filler (FILL_LANES parallel heads) ---
+    _lane_present: list = field(default_factory=lambda: [0]*FILL_LANES)
+    _lane_fill_timer: list = field(default_factory=lambda: [0]*FILL_LANES)
+    _lane_filled: list = field(default_factory=lambda: [0]*FILL_LANES)
+    _lane_id: list = field(default_factory=lambda: list(range(FILL_LANES)))
+
     # --- helpers for discrete events (bottling line) ---
-    _fill_timer: int = field(default=0, repr=False)
     _station_timer: int = field(default=0, repr=False)
     _discharge_timer: int = field(default=0, repr=False)
-    _bottle_filled: int = field(default=0, repr=False)
     _bottle_capped: int = field(default=0, repr=False)
 
     def reset(self) -> None:
@@ -66,10 +72,11 @@ class PlantSimulator:
         self.pump_feedback = 0
         self.valve_feedback = 0
         self.fault_status = config.FAULT_NONE
-        self._fill_timer = 0
+        self._lane_present = [0]*FILL_LANES
+        self._lane_fill_timer = [0]*FILL_LANES
+        self._lane_filled = [0]*FILL_LANES
         self._station_timer = 0
         self._discharge_timer = 0
-        self._bottle_filled = 0
         self._bottle_capped = 0
 
     # ------------------------------------------------------------------
@@ -108,7 +115,7 @@ class PlantSimulator:
         if pump_cmd > 0 and not pump_failed and self.tank_level > 0.5:
             self.pump_feedback = 1
             # Flow = 40 L/min at 100%, proportional below
-            self.flow_rate = 40.0 * (pump_cmd / 100.0) + random.uniform(-1.5, 1.5)
+            self.flow_rate = 40.0 * (pump_cmd / 100.0) + random.uniform(-0.5, 0.5)
             self.flow_rate = max(0.0, self.flow_rate)
         else:
             self.pump_feedback = 0
@@ -127,8 +134,8 @@ class PlantSimulator:
         cooling_factor = cooling_valve_cmd / 100.0 if cooling_valve_cmd > 0 else 0.0
         cool_target = (config.COOLER_SETPOINT * cooling_factor
                        + self.pasteur_temp * (1 - cooling_factor))
-        self.cooler_temp += 0.25 * (cool_target - self.cooler_temp)
-        self.cooler_temp += random.uniform(-0.05, 0.05)
+        self.cooler_temp += 0.08 * (cool_target - self.cooler_temp)
+        self.cooler_temp += random.uniform(-0.02, 0.02)
 
         # 5. Filler & 6. Capper / Conveyor (S4 / S5) ---------------------
         self._update_bottling(conveyor_cmd, fill_valve_cmd, capper_cmd)
@@ -151,9 +158,10 @@ class PlantSimulator:
             # Normal: heater_power_cmd (0-100 %) drives the achievable temp.
             target = config.AMBIENT_TEMP + (heater_power_cmd / 100.0) * 60.0
 
-        # Move toward the target with a simple time constant.
-        self.pasteur_temp += 0.20 * (target - self.pasteur_temp)
-        self.pasteur_temp += random.uniform(-0.08, 0.08)
+        # Industrial thermal inertia: large volumes heat/cool slowly.
+        # Time constant ~0.05 means ~40 ticks to 90% of target (~realistic).
+        self.pasteur_temp += 0.05 * (target - self.pasteur_temp)
+        self.pasteur_temp += random.uniform(-0.02, 0.02)
 
     def _update_bottling(self, conveyor_cmd: float, fill_valve_cmd: int,
                          capper_cmd: int) -> None:
@@ -176,30 +184,42 @@ class PlantSimulator:
         self._station_timer = (self._station_timer + 1) % cycle
 
         if self._station_timer == 0:
-            # Gap between bottles: clear the station and reset per-bottle flags.
             self.bottle_present = 0
-            self._fill_timer = 0
-            self._bottle_filled = 0
             self._bottle_capped = 0
             return
 
-        self.bottle_present = 1
+        # Assign bottle to first available lane on station entry
+        for i in range(FILL_LANES):
+            if not self._lane_present[i] and not self._lane_filled[i]:
+                self._lane_present[i] = 1
+                self._lane_fill_timer[i] = 0
+                self._lane_filled[i] = 0
+                break
 
-        # Filling: higher flow = faster fill. At 40 L/min, 3 ticks to fill.
-        # At lower flow, filling takes proportionally longer.
+        # Update bottle_present (any lane has a bottle)
+        self.bottle_present = 1 if any(self._lane_present) else 0
+
+        # Dynamic fill duration based on flow rate
         fr = max(self.flow_rate, 5.0)
         dyn_fill = max(2, min(8, round(config.FILL_DURATION_TICKS * 40.0 / fr)))
-        if fill_valve_cmd and not self._bottle_filled:
-            self._fill_timer += 1
-            if self._fill_timer >= dyn_fill:
-                self._bottle_filled = 1
 
-        # Capping & counting: a filled bottle that gets capped enters the conveyor queue.
-        if self._bottle_filled and capper_cmd and not self._bottle_capped:
-            if self.conveyor_queue < self.conveyor_max:
-                self.bottle_count += 1
-                self.conveyor_queue += 1
-                self._bottle_capped = 1
+        # Each lane fills independently
+        for i in range(FILL_LANES):
+            if self._lane_present[i] and fill_valve_cmd and not self._lane_filled[i]:
+                self._lane_fill_timer[i] += 1
+                if self._lane_fill_timer[i] >= dyn_fill:
+                    self._lane_filled[i] = 1
+
+        # Capping: filled bottles from any lane move to conveyor
+        for i in range(FILL_LANES):
+            if self._lane_filled[i] and capper_cmd and not self._bottle_capped:
+                if self.conveyor_queue < self.conveyor_max:
+                    self.bottle_count += 1
+                    self.conveyor_queue += 1
+                    self._lane_present[i] = 0
+                    self._lane_filled[i] = 0
+                    self._lane_fill_timer[i] = 0
+                    self._bottle_capped = 1
 
         # Conveyor discharge: independent discharge timer, rate proportional to speed.
         # At 100% conveyor, 1 bottle exits every BOTTLE_CYCLE_TICKS ticks.
@@ -229,6 +249,8 @@ class PlantSimulator:
             "cooler_temp": round(self.cooler_temp, 2),
             "flow_rate": round(self.flow_rate, 2),
             "bottle_present": int(self.bottle_present),
+            "fill_lanes": [int(p) for p in self._lane_present],
+            "fill_lane_filled": [int(f) for f in self._lane_filled],
             "bottle_count": int(self.bottle_count),
             "bottles_completed": int(self.bottles_completed),
             "conveyor_queue": int(self.conveyor_queue),

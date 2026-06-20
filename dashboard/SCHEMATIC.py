@@ -421,9 +421,9 @@ def live_view():
         ("pipe",),
         ("COOLER", f"{cool:.1f}°C", f"Cool {cc:.0f}%", "active" if s3_ok else "warn", 'cooling_valve_cmd' in man),
         ("pipe",),
-        ("FILLER", "FILLING" if s4_ok else "IDLE", f"Valve {'ON' if fc else 'OFF'}", "active" if s4_ok else ("warn" if bp else "idle"), False),
+        ("FILLER", f"{bc} fill", f"{'FILLING' if s4_ok else 'IDLE'} | Valve {'ON' if fc else 'OFF'}", "active" if s4_ok else ("warn" if bp else "idle"), False),
         ("pipe",),
-        ("CAPPER", f"{bc}", f"Done: {latest.get('bottles_completed',0)}", "active" if s5_ok else "idle", 'conveyor_cmd' in man),
+        ("CAPPER", f"Done: {latest.get('bottles_completed',0)}", f"Belt: {belt}/{belt_max} | {'MOVING' if s5_ok else 'STOPPED'}", "active" if s5_ok else "idle", 'conveyor_cmd' in man),
     ]
 
     for col, item in zip(cols, items):
@@ -458,14 +458,15 @@ def live_view():
          f"PI control &middot; Opens >{config.COOLER_OPEN_ABOVE:.0f}°C"),
         ("S4", "FILLER", "FILLING" if s4_ok else ("WAITING" if bp else "IDLE"),
          GREEN if s4_ok else (ORANGE if bp else TEXT_DIM),
-         [("Bottle", "Present" if bp else "None"), ("Fill Valve", "ON" if fc else "OFF"),
-          ("Timer", f"{config.FILL_DURATION_TICKS} ticks"), ("Status", "Filling" if s4_ok else "Waiting")],
-         f"{config.FILL_DURATION_TICKS} ticks fill &middot; {config.BOTTLE_CYCLE_TICKS} ticks/bottle"),
+         [("Heads Active", f"{sum(latest.get('fill_lanes',[0]*4))}/4"),
+          ("Fill Valve", "ON" if fc else "OFF"),
+          ("Flow Rate", f"{flow:.1f} L/min"), ("Status", "Filling" if s4_ok else "Waiting")],
+         f"4-lane rotary filler &middot; Fill: 2-8 ticks by flow"),
         ("S5", "CAPPER", "RUNNING" if s5_ok else "STOPPED",
          GREEN if s5_ok else TEXT_DIM,
-         [("In Queue", f"{belt}/{belt_max}"), ("Completed", str(latest.get("bottles_completed",0))),
-          ("Conveyor", f"{cvc:.0f}%"), ("Capper", "ON" if cvc>0 else "OFF")],
-         f"Output: {latest.get('bottles_completed',0)} total &middot; {config.BOTTLE_CYCLE_TICKS} ticks/bottle"),
+         [("On Belt", f"{belt}/{belt_max}"), ("Completed", str(latest.get("bottles_completed",0))),
+          ("Conveyor", f"{cvc:.0f}%"), ("Rate", f"{latest.get('bottles_completed',0)/max(latest.get('tick',1),1)*60:.0f}/min")],
+         f"Belt capacity: {belt_max} &middot; Discharge: {config.BOTTLE_CYCLE_TICKS} ticks/bottle at 100%"),
     ]
     for col, (sid, nm, stt, clr, rows, req) in zip(sc, cards):
         col.markdown(stage_card(sid, nm, stt, clr, rows, req), unsafe_allow_html=True)

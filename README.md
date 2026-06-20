@@ -175,18 +175,27 @@ flowchart LR
 | S4 Filler | **4-lane rotary** + flow-dependent timer | 4 parallel fill heads. Each: detect→fill→done. `fill_needed = clamp(FILL_DURATION_TICKS * 40 / flow_rate, 2, 8)`. Bottles assigned round-robin to first available lane |
 | S5 Conveyor | Flow-matched proportional + discharge timer | `conveyor_cmd = clamp(100 * FILL_DURATION_TICKS / fill_needed, 25, 100)`. Independent discharge timer: 1 bottle exits per cycle. Queue max 24 |
 
-### Flow→Fill→Conveyor Speed Chain
+## Industrial Speed Chain
 
-Pump speed determines flow rate, which determines how fast each bottle fills. Conveyor speed matches the fill pace:
+Real beverage lines have a tight speed dependency: the feed pump determines how much liquid is available, which directly limits how fast bottles can be filled. The conveyor must match the fill rate or bottles pile up.
 
-| Pump % | Flow (L/min) | Fill (ticks) | Conveyor (%) | Bottles/min |
-|--------|-------------|-------------|-------------|------------|
-| 100% | ~40 | 3 | 100% | ~10 |
-| 68% | ~27 | 4-5 | 60-75% | ~6-8 |
-| 50% | ~20 | 6 | 50% | ~5 |
-| 33% | ~13 | 8 | 38%→25% | ~3 |
+```
+FEED PUMP speed          FLOW RATE              FILL DURATION           CONVEYOR SPEED
+    100%        →        40 L/min       →       3 ticks/bottle   →     100% (6t cycle)
+     68%        →        27 L/min       →       4-5 ticks/bottle →     60-75%
+     50%        →        20 L/min       →       6 ticks/bottle   →     50%
+     33%        →        13 L/min       →       8 ticks/bottle   →     25% (minimum)
+```
 
-Formula: `fill_needed = clamp(3 * 40 / flow_rate, 2, 8)`, `conveyor = clamp(100 * 3 / fill_needed, 25, 100)`
+Each lane of the 4-head rotary filler operates independently:
+1. Bottle arrives → assigned to first available lane
+2. Fill valve opens → liquid flows at current flow rate
+3. After `fill_needed` ticks → bottle filled, moves to capper
+4. Capper seals bottle → enters conveyor queue (max 24)
+5. Conveyor discharges at speed-proportional rate → `bottles_completed` counter
+
+Dashboard shows per-lane status: ● green=DONE, ● blue=FILLING, ○ gray=IDLE
+
 
 ## Fault Injection and Alarm Codes
 

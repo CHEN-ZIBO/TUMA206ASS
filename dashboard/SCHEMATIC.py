@@ -421,7 +421,7 @@ def live_view():
         ("pipe",),
         ("COOLER", f"{cool:.1f}°C", f"Cool {cc:.0f}%", "active" if s3_ok else "warn", 'cooling_valve_cmd' in man),
         ("pipe",),
-        ("FILLER", f"{bc} fill", f"{'FILLING' if s4_ok else 'IDLE'} | Valve {'ON' if fc else 'OFF'}", "active" if s4_ok else ("warn" if bp else "idle"), False),
+        ("FILLER", f"x4 heads", f"{'FILLING' if s4_ok else 'IDLE'} | {sum(latest.get('fill_lanes',[0]*4))}/4 active", "active" if s4_ok else ("warn" if bp else "idle"), False),
         ("pipe",),
         ("CAPPER", f"Done: {latest.get('bottles_completed',0)}", f"Belt: {belt}/{belt_max} | {'MOVING' if s5_ok else 'STOPPED'}", "active" if s5_ok else "idle", 'conveyor_cmd' in man),
     ]
@@ -435,6 +435,21 @@ def live_view():
                 col.markdown(eq_tank(name, val, level, sub, cls, m), unsafe_allow_html=True)
             else:
                 col.markdown(eq_card(name, val, sub, cls, m), unsafe_allow_html=True)
+
+    # ── Filler Lane Status ──
+    lanes_p = latest.get("fill_lanes", [0]*4)
+    lanes_f = latest.get("fill_lane_filled", [0]*4)
+    lane_html = '<div style="display:flex;gap:16px;align-items:center;margin:4px 0 10px 0;">'
+    lane_html += '<span style="font-size:0.65rem;color:#8b949e;font-weight:600;">FILL LANES:</span>'
+    for i in range(4):
+        p, f = lanes_p[i], lanes_f[i]
+        if f: dot, label = "#3fb950", f"L{i+1} DONE"
+        elif p: dot, label = "#58a6ff", f"L{i+1} FILL"
+        else: dot, label = "#30363d", f"L{i+1} IDLE"
+        lane_html += f'<span style="display:flex;align-items:center;gap:4px;font-size:0.6rem;color:#c9d1d9;">'
+        lane_html += f'<span style="width:8px;height:8px;border-radius:50%;background:{dot};display:inline-block;"></span>{label}</span>'
+    lane_html += '</div>'
+    st.markdown(lane_html, unsafe_allow_html=True)
 
     # ── Stage Cards ──
     st.markdown('<div class="section-label">Stage Details</div>', unsafe_allow_html=True)
@@ -458,10 +473,10 @@ def live_view():
          f"PI control &middot; Opens >{config.COOLER_OPEN_ABOVE:.0f}°C"),
         ("S4", "FILLER", "FILLING" if s4_ok else ("WAITING" if bp else "IDLE"),
          GREEN if s4_ok else (ORANGE if bp else TEXT_DIM),
-         [("Heads Active", f"{sum(latest.get('fill_lanes',[0]*4))}/4"),
-          ("Fill Valve", "ON" if fc else "OFF"),
-          ("Flow Rate", f"{flow:.1f} L/min"), ("Status", "Filling" if s4_ok else "Waiting")],
-         f"4-lane rotary filler &middot; Fill: 2-8 ticks by flow"),
+         [("Flow Rate", f"{flow:.1f} L/min"), ("Fill Valve", "ON" if fc else "OFF"),
+          ("Fill Time", f"{max(2,min(8,round(config.FILL_DURATION_TICKS*40/max(flow,5))))} ticks"),
+          ("Status", "Filling" if s4_ok else "Waiting")],
+         f"4-lane rotary &middot; Fill: 2-8t by flow &middot; {sum(latest.get('fill_lanes',[0]*4))}/4 heads active"),
         ("S5", "CAPPER", "RUNNING" if s5_ok else "STOPPED",
          GREEN if s5_ok else TEXT_DIM,
          [("On Belt", f"{belt}/{belt_max}"), ("Completed", str(latest.get("bottles_completed",0))),

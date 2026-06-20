@@ -159,8 +159,8 @@ def trends_view():
                           mode="lines", hovertemplate=f"%{{y:.1f}} {unit}<extra></extra>"), row=row, col=col)
             yr = yranges.get(key)
             if yr: fig.update_yaxes(range=yr, row=row, col=col, **_AXIS)
-        fig.add_hline(y=config.PASTEUR_SAFE_MAX, line_dash="dot", line_color="#f8514966", row=1, col=1)
-        fig.add_hline(y=config.PASTEUR_SAFE_MIN, line_dash="dot", line_color="#f8514966", row=1, col=1)
+        fig.add_hline(y=config.PASTEUR_SAFE_MAX, line_dash="dot", line_color="rgba(248,81,73,0.4)", row=1, col=1)
+        fig.add_hline(y=config.PASTEUR_SAFE_MIN, line_dash="dot", line_color="rgba(248,81,73,0.4)", row=1, col=1)
         for ev in engine.historian.recent_alarms(50):
             code = int(ev.get("alarm_code", 0)); ts_val = ev.get("ts", 0)
             if code and ts_val >= df["ts"].iloc[0]:

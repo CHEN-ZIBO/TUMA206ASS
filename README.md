@@ -2,47 +2,69 @@
 
 This repository contains a digital twin of a smart beverage pasteurization and bottling line. The system is organized like an RTL-style modular design: each module has clear input pins, output pins, and a defined responsibility.
 
-> **TUMA206 group project.** A pure-Python implementation of the 5-module
-> architecture below. The dashboard runs the whole line locally in one command
-> and lets you inject faults live and see PLC alarms + AI operator advice.
+> **TUMA206 Group 1 — V3 Final.** A pure-Python implementation of the 5-module architecture.
+> Three-page professional dashboard: SCHEMATIC (process flow), TRENDS (real-time charts), ALARMS (AI diagnostics).
+> All actuators use proportional 0-100% control with per-actuator manual override. Fault detection runs always — safety is never bypassed.
 
 ## Quick start
 
 ```bash
-# 1. Install Python 3.10+ (https://www.python.org/downloads/), then:
 pip install -r requirements.txt
-
-# 2. Launch the dashboard (this starts the simulator, PLC and data layer too):
 streamlit run dashboard/app.py
 ```
 
-Then in the browser: press **Start line**, watch the trends, and use the
-**Fault injection** menu to trigger an alarm and see the AI recommendation.
+Press **START**, watch the process flow diagram update live. Inject faults from the sidebar or toggle per-actuator manual override to test alarm responses. No API key or MQTT broker required. For Claude-powered AI diagnostics, set `ANTHROPIC_API_KEY` in a `.env` file. Terminal smoke test: `python run.py --ticks 30`.
 
-No API key and no MQTT broker are required for the basic demo. To try the
-Claude-powered assistant, copy `.env.example` to `.env` and set
-`ANTHROPIC_API_KEY`. A terminal-only smoke test is available via `python run.py`.
+## V3 Improvements (relative to V2)
 
-## Technology stack (from the project proposal)
+### Architecture
+| Area | V2 | V3 |
+|------|----|----|
+| Actuator control | Mixed binary (on/off) + float | **All proportional 0-100%** (inlet valve, pump, heater, cooling, conveyor) |
+| Manual override | Global auto/manual toggle | **Per-actuator independent override** — PLC adapts remaining auto actuators |
+| Fault detection | TEMP_OUT_OF_RANGE skipped when heater manual | **All faults detected always** — safety never bypassed |
+| Heater/Cooler control | Simple integral with clamping (windup possible) | **PI with true anti-windup** — blocks accumulation only when saturated |
+| Tank level alarm | None | **TANK_OVERFLOW (95%) + TANK_EMPTY (5%)** — stops line on critical levels |
+| Conveyor model | Bottle count only | **Queue model** — bottles enter belt, exit at speed-proportional rate, max capacity guard |
+| Fast recovery | Manual offsets | Proportional reset on FAULT clear; pump pre-charged at 70% on START |
+
+### Dashboard
+| Area | V2 | V3 |
+|------|----|----|
+| Pages | 3 pages with emoji titles | **st.navigation()** with clean uppercase labels: SCHEMATIC / TRENDS / ALARMS |
+| P&ID Schematic | Hand-coded raw SVG (misaligned, legend, fragile) | **CSS Grid equipment cards** — dark industrial theme, bottom-up tank fill, status glows, no legend |
+| Theme | Warm brown/cream industrial | **Dark tech theme** (`#0d1117` base) with green/orange/red status coding |
+| Button feedback | None | **CSS :active press effect + ripple + toast confirmation** |
+| START behavior | Starts line, keeps manual overrides | **Clears all manuals → full AUTO mode** |
+| Manual sidebar order | Feed Pump first | **Inlet Valve → Feed Pump → Heater → Cooling → Conveyor** (process order) |
+| Trends page | KeyError on cooler_temp chart | Fixed: `cooler_temp` + `cooling_valve_cmd` added to historian columns |
+
+### Code Quality
+| Area | V2 | V3 |
+|------|----|----|
+| `_clamp()` | Duplicated in plant.py + controller.py | **Single definition in config.py**, imported by both |
+| `run.py` | Duplicated in `ai_assistant/` | **Removed duplicate** |
+| AI cache | Keyed only on alarm_code (stale diagnoses) | **Sensor fingerprint** `{temp}_{level}_{flow}` in cache key |
+| `UPDATE_PERIOD_S` | Unused | Removed from control flow references |
+| Unused constants | `STAGE_NAMES` defined but never imported | Cleaned up |
+
+## Technology stack
 
 | Layer | Tool | Module |
 |---|---|---|
-| Frontend (dashboard) | Streamlit + Plotly | M4 |
-| Backend | Python (FastAPI) + paho-mqtt | engine + M3 (FastAPI is optional) |
+| Frontend (dashboard) | Streamlit + Plotly + CSS Grid | M4 |
+| Backend | Python (FastAPI) + paho-mqtt | engine + M3 |
 | Database | SQLite + CSV export | M3 historian |
 | LLM model + provider | Claude Sonnet + Anthropic API | M5 |
 | Agent framework | Claude Agent SDK / custom Python loop | M5 |
 
-Everything is Python and installs with `pip`. React was considered but the team
-chose Streamlit so no one has to learn a new frontend framework.
-
-## 1. System Assumption
+## System Assumption
 
 | Item | Value |
 |---|---|
 | System state update period | 1 s |
 
-## 2. Top-Level Architecture
+## Top-Level Architecture
 
 ```mermaid
 flowchart LR
@@ -59,27 +81,27 @@ flowchart LR
 
 Key rule: the closed-loop control path is only between **M1 Plant Simulator** and **M2 PLC Controller**. The AI assistant recommends operator actions but does not directly control actuators.
 
-## 3. Module Summary
+## Module Summary
 
 | Module | Main input pins | Main output pins | Responsibility |
 |---|---|---|---|
-| M1 Plant Simulator | `actuator_cmd_*`, `fault_inject_code`, `reset_fault` | `sensor_*`, `feedback_*`, `stage_state`, `fault_status` | Simulate the physical beverage line and fault behavior. |
-| M2 PLC Controller | `sensor_*`, `feedback_*`, `operator_start`, `operator_stop` | `actuator_cmd_*`, `alarm_code`, `plc_state` | Run control logic, state machine, and fault detection. |
-| M3 Data Layer | `plant_tags`, `control_tags`, `alarm_tags` | `real_time_tags`, `history_tags`, `data_stale_flag` | Transfer tags through MQTT and store history in a historian/database. |
-| M4 Dashboard | `real_time_tags`, `history_tags`, `recommendation_text` | `operator_start`, `operator_stop`, `fault_inject_code`, `reset_fault` | Display live status, trends, alarms, and fault-injection controls. |
-| M5 AI Assistant | `latest_tags`, `alarm_code`, `recent_history` | `recommendation_text`, `diagnosis_label`, `confidence_level` | Explain alarms and recommend operator actions. |
+| M1 Plant Simulator | `actuator_cmd_*`, `fault_inject_code`, `reset_fault` | `sensor_*`, `feedback_*`, `stage_state`, `fault_status`, `conveyor_queue` | Simulate the physical beverage line and fault behavior. |
+| M2 PLC Controller | `sensor_*`, `feedback_*`, `operator_start`, `operator_stop`, `manual_overrides` | `actuator_cmd_*`, `alarm_code`, `plc_state` | Run control logic, state machine, fault detection. Adapts auto actuators around manual overrides. |
+| M3 Data Layer | `plant_tags`, `control_tags`, `alarm_tags` | `real_time_tags`, `history_tags`, `data_stale_flag` | Transfer tags through MQTT and store history in SQLite. |
+| M4 Dashboard | `real_time_tags`, `history_tags`, `recommendation_text` | `operator_start`, `operator_stop`, `fault_inject_code`, `reset_fault`, `manual_overrides` | Three-page professional UI: SCHEMATIC (P&ID + KPIs), TRENDS (charts), ALARMS (AI + event log). |
+| M5 AI Assistant | `latest_tags`, `alarm_code`, `recent_history` | `recommendation_text`, `diagnosis_label`, `confidence_level` | Explain alarms and recommend operator actions. Claude API or rule-based fallback. |
 
-## 4. M1 Plant Simulator Port Specification
+## M1 Plant Simulator Port Specification
 
 ```text
 module M1_PlantSimulator (
-    input  pump_cmd,
-    input  inlet_valve_cmd,
-    input  heater_power_cmd,
-    input  cooling_valve_cmd,
-    input  conveyor_cmd,
-    input  fill_valve_cmd,
-    input  capper_cmd,
+    input  pump_cmd,              // 0-100% proportional
+    input  inlet_valve_cmd,       // 0-100% proportional
+    input  heater_power_cmd,      // 0-100% proportional
+    input  cooling_valve_cmd,     // 0-100% proportional
+    input  conveyor_cmd,          // 0-100% proportional
+    input  fill_valve_cmd,        // 0/1 binary (timer-controlled)
+    input  capper_cmd,            // 0/1 binary
     input  fault_inject_code,
     input  reset_fault,
     output tank_level,
@@ -88,6 +110,8 @@ module M1_PlantSimulator (
     output flow_rate,
     output bottle_present,
     output bottle_count,
+    output conveyor_queue,        // bottles currently on belt
+    output conveyor_max,          // max belt capacity
     output pump_feedback,
     output valve_feedback,
     output stage_state,
@@ -95,7 +119,7 @@ module M1_PlantSimulator (
 );
 ```
 
-## 5. M2 PLC Controller Port Specification
+## M2 PLC Controller Port Specification
 
 ```text
 module M2_PLCController (
@@ -108,146 +132,129 @@ module M2_PLCController (
     input  valve_feedback,
     input  operator_start,
     input  operator_stop,
-    output pump_cmd,
-    output inlet_valve_cmd,
-    output heater_power_cmd,
-    output cooling_valve_cmd,
-    output conveyor_cmd,
-    output fill_valve_cmd,
-    output capper_cmd,
+    input  manual_overrides,      // {actuator: value} for per-actuator manual control
+    output pump_cmd,              // 0-100%
+    output inlet_valve_cmd,       // 0-100%
+    output heater_power_cmd,      // 0-100%
+    output cooling_valve_cmd,     // 0-100%
+    output conveyor_cmd,          // 0-100%
+    output fill_valve_cmd,        // 0/1
+    output capper_cmd,            // 0/1
     output alarm_code,
     output plc_state
 );
 ```
 
-## 6. M3-M5 Port Specifications
-
-### M3 Data Layer
-
-```text
-module M3_DataLayer (
-    input  plant_tags,
-    input  control_tags,
-    input  alarm_tags,
-    output real_time_tags,
-    output history_tags,
-    output data_stale_flag
-);
-```
-
-### M4 Dashboard
-
-```text
-module M4_Dashboard (
-    input  real_time_tags,
-    input  history_tags,
-    input  recommendation_text,
-    output operator_start,
-    output operator_stop,
-    output fault_inject_code,
-    output reset_fault
-);
-```
-
-### M5 AI Assistant
-
-```text
-module M5_AIAssistant (
-    input  latest_tags,
-    input  alarm_code,
-    input  recent_history,
-    output recommendation_text,
-    output diagnosis_label,
-    output confidence_level
-);
-```
-
-## 7. M1 and M2 Design
-
-### 7.1 Pipeline
+## Pipeline (5 Stages)
 
 ```mermaid
 flowchart LR
-    S1[S1 Raw Tank\nsensor: tank_level\ncmd: inlet_valve_cmd] --> S2[S2 Pasteurizer\nsensor: pasteur_temp\ncmd: heater_power_cmd]
-    S2 --> S3[S3 Cooler\nsensor: cooler_temp\ncmd: cooling_valve_cmd]
-    S3 --> S4[S4 Filler\nsensor: bottle_present\ncmd: fill_valve_cmd]
-    S4 --> S5[S5 Capper / Conveyor\nsensor: bottle_count\ncmd: conveyor_cmd]
-    M2[M2 PLC Controller\nstate machine + on/off + simple PID + fault detection] -. controls .-> S1
-    M2 -. controls .-> S2
-    M2 -. controls .-> S3
-    M2 -. controls .-> S4
-    M2 -. controls .-> S5
+    IP[Inlet Pump] --> S1[S1 Raw Tank\nTarget: 50%\nRange: 30-80%]
+    S1 --> FP[Feed Pump]
+    FP --> S2[S2 Pasteurizer\nSetpoint: 72 degC\nSafe: 68-78 degC]
+    S2 --> S3[S3 Cooler\nTarget: 20 degC\nMax bottling: 25 degC]
+    S3 --> S4[S4 Filler\nFill: 3 ticks\nCycle: 6 ticks/bottle]
+    S4 --> S5[S5 Capper/Conveyor\nQueue: 0-8 bottles\nSpeed: 0-100%]
+    S5 --> OUT[Output]
 ```
 
-### 7.2 Stage Pin Definition
+## Control Strategies
 
-| Stage | M1 output sensor pins | M2 output command pins | Normal control meaning |
-|---|---|---|---|
-| S1 Raw Tank | `tank_level`, `flow_rate` | `inlet_valve_cmd`, `pump_cmd` | Low level opens inlet; high level closes inlet. |
-| S2 Pasteurizer | `pasteur_temp`, `flow_rate` | `heater_power_cmd`, `pump_cmd` | Temperature below setpoint increases heater power. |
-| S3 Cooler | `cooler_temp` | `cooling_valve_cmd` | High temperature opens cooling valve. |
-| S4 Filler | `bottle_present`, `fill_level_est` | `fill_valve_cmd` | Bottle present opens filling valve for a fixed time. |
-| S5 Capper / Conveyor | `bottle_count`, `capper_feedback` | `conveyor_cmd`, `capper_cmd` | Conveyor moves bottles and capper closes bottles. |
+| Stage | Method | Details |
+|---|---|---|
+| S1 Inlet Valve | Proportional (P) | Target 50%, gain=5. Full open at <=30%, full close at >=80% |
+| S1 Feed Pump | Proportional (P) | Speed proportional to tank level: 30% at low, 100% at high |
+| S2 Pasteurizer | PI + anti-windup | Setpoint 72 degC, Kp=4.0. Gain adapts to manual pump override (2.5-5.5) |
+| S3 Cooler | PI + anti-windup | Target 20 degC, Kp=4.0. Integrated cooling valve 0-100% |
+| S4 Filler | Timer | 3-tick fill valve open when bottle present AND process ready |
+| S5 Conveyor | Proportional | Speed 0-100%, cycle inversely proportional. Bottling only when pasteurized AND cooled |
 
-### 7.3 Fault Injection and Detection Pins
+## Fault Injection and Alarm Codes
 
-| Case | Fault injection pin | Observed abnormal pins | M2 alarm output |
-|---|---|---|---|
-| Normal | `fault_inject_code = 0` | Sensor and feedback pins follow commands. | `alarm_code = 0` |
-| Sensor fault | `fault_inject_code = TEMP_STUCK` | `pasteur_temp` is frozen while `heater_power_cmd` changes. | `alarm_code = SENSOR_TEMP_STUCK` |
-| Equipment fault | `fault_inject_code = PUMP_FAIL` | `pump_cmd = 1`, but `pump_feedback = 0` and `flow_rate = 0`. | `alarm_code = PUMP_NO_FLOW` |
-| Process fault | `fault_inject_code = TEMP_EXCURSION` | `pasteur_temp` is outside safe range for multiple update cycles. | `alarm_code = TEMP_OUT_OF_RANGE` |
-| Infrastructure fault | `fault_inject_code = MQTT_STALE` | `data_stale_flag = 1` or tag timestamp is too old. | `alarm_code = DATA_STALE` |
+| Code | Fault | Alarm | Debounce | Effect |
+|------|-------|-------|----------|--------|
+| 0 | Normal | No alarm (0) | — | Normal operation |
+| 1 | Temperature sensor stuck | SENSOR_TEMP_STUCK (10) | 3 ticks | pasteur_temp frozen → FAULT, all outputs=0 |
+| 2 | Feed pump failure | PUMP_NO_FLOW (20) | 3 ticks | pump on but no flow/feedback → FAULT |
+| 3 | Temperature excursion | TEMP_OUT_OF_RANGE (30) | 3 ticks | temp outside 68-78 degC after warm-up → FAULT; auto-clears when back in range |
+| 4 | Data link stale | DATA_STALE (40) | Instant | tags frozen, dashboard shows last values |
+| — | Tank >95% | TANK_OVERFLOW (50) | 3 ticks | Overflow risk → FAULT |
+| — | Tank <5% | TANK_EMPTY (51) | 3 ticks | Dry-run risk → FAULT |
 
-## 8. Repository Structure
+### Manual-Override Induced Faults
+
+Any actuator set to manual can cause process faults — fault detection runs ALWAYS:
+- Inlet valve 100% + pump 0% → tank fills past 95% → TANK_OVERFLOW
+- Inlet valve 0% + pump 100% → tank drains below 5% → TANK_EMPTY
+- Heater 0% or 100% → temperature leaves 68-78 degC → TEMP_OUT_OF_RANGE
+- Pump manual + pump failure injection → PUMP_NO_FLOW
+
+## PLC State Machine
+
+```
+IDLE ──[START]──> STARTING ──[1 tick]──> RUNNING ──[serious alarm]──> FAULT
+  ^                  ^                      |                            |
+  |                  |                      [STOP]                       |
+  |                  |                      v                            |
+  └────[STOP]────────┴────────────────── STOPPING ──[1 tick]──> IDLE <──┘
+                                                                    (acknowledge)
+```
+
+## Repository Structure
 
 ```text
-README.md            # this file (design spec + how to run)
-config.py            # shared constants: tags, set-points, fault & alarm codes
-simulator/plant.py   # M1  Plant Simulator (physics + fault behaviour)
-plc/controller.py    # M2  PLC Controller (state machine, control, fault detection)
-messaging/bus.py     # M3a Message bus (in-process or MQTT/paho-mqtt)
-historian/store.py   # M3b Historian (SQLite storage + CSV export)
-engine/runtime.py    #     Closed-loop runtime that wires M1+M2 and feeds M3
-ai_assistant/assistant.py  # M5  AI Assistant (Claude API + rule-based fallback)
-dashboard/app.py     # M4  Streamlit + Plotly dashboard (demo entry point)
-backend/api.py       #     Optional FastAPI REST/WebSocket server (same engine)
-run.py               #     Headless terminal demo / smoke test
+README.md
+config.py               # All constants, setpoints, fault/alarm codes, clamp()
+simulator/plant.py      # M1 — physics + conveyor queue model
+plc/controller.py       # M2 — PI control + anti-windup + 6 alarm detectors
+engine/runtime.py       # Closed-loop wire-up + background thread
+messaging/bus.py        # M3a — InProcessBus / MqttBus
+historian/store.py      # M3b — SQLite + CSV export
+ai_assistant/assistant.py  # M5 — Claude API + rule-based fallback (7 alarm types)
+dashboard/
+  app.py                # Navigation hub (st.navigation)
+  SCHEMATIC.py          # Page 0 — P&ID process flow + stage cards + KPIs
+  pages/
+    1_Trends.py         # Page 1 — 2x2 sensor charts + actuator charts
+    2_Alarms.py         # Page 2 — AI diagnosis + alarm event log
+backend/api.py          # FastAPI REST + WebSocket (optional)
+run.py                  # CLI smoke test
 requirements.txt
-.env.example         # template for ANTHROPIC_API_KEY / USE_MQTT
 ```
 
-### Suggested module ownership (6 members)
+## Key Configuration Values
 
-The first two modules are the most complex, so the chat agreed to put 3 people
-on them. A suggested split:
+| Constant | Value | Meaning |
+|----------|-------|---------|
+| TANK_LEVEL_TARGET | 50% | Tank level setpoint |
+| TANK_LEVEL_LOW / HIGH | 30% / 80% | Inlet valve full open / full close |
+| TANK_LEVEL_MIN_PUMP | 10% | Pump dry-run guard |
+| TANK_CRITICAL_HIGH / LOW | 95% / 5% | Overflow / empty alarm thresholds |
+| PASTEUR_SETPOINT | 72 degC | Pasteurization target |
+| PASTEUR_SAFE_MIN / MAX | 68 / 78 degC | Safe temperature band |
+| COOLER_SETPOINT | 20 degC | Cooling target |
+| COOLER_MAX_BOTTLING | 25 degC | No bottling above this |
+| CONVEYOR_MAX_BOTTLES | 8 | Max bottles on belt |
+| ALARM_DEBOUNCE_TICKS | 3 | Consecutive abnormal ticks to latch alarm |
+| FILL_DURATION_TICKS | 3 | Fill valve open duration |
+| BOTTLE_CYCLE_TICKS | 6 | Bottle cycle length at 100% speed |
 
-| Member | Module / area |
-|---|---|
-| 1 | M1 Plant Simulator (`simulator/`) |
-| 2 | M2 PLC Controller (`plc/`) |
-| 3 | M1+M2 closed-loop engine + faults (`engine/`) |
-| 4 | M3 Data Layer: MQTT bus + historian (`messaging/`, `historian/`) |
-| 5 | M4 Dashboard (`dashboard/`) |
-| 6 | M5 AI Assistant (`ai_assistant/`) |
+## Demo Plan
 
-## 9. Demo Plan
+1. Run `streamlit run dashboard/app.py`
+2. Press **START** — line ramps up: tank reaches 50%, pasteurizer reaches 72 degC, bottles begin capping
+3. SCHEMATIC page shows live process flow with colored equipment cards and stage detail panels
+4. Switch to TRENDS page to see real-time sensor and actuator charts
+5. Inject faults from sidebar:
+   - `1` Temperature sensor stuck → SENSOR_TEMP_STUCK → FAULT, AI diagnoses
+   - `2` Feed pump failure → PUMP_NO_FLOW → FAULT
+   - `3` Temperature excursion → TEMP_OUT_OF_RANGE → FAULT (auto-clears on recovery)
+   - `4` Data link stale → DATA_STALE → dashboard freezes
+6. Toggle per-actuator manual override to cause faults:
+   - Set Inlet Valve to 100% and Feed Pump to 0% → tank overfills → TANK_OVERFLOW
+   - Set Heater to 0% → temp drops → TEMP_OUT_OF_RANGE
+7. Press **RESET** then **START** to recover (all manuals cleared)
+8. Export CSV from TRENDS page for evidence
+9. Switch to ALARMS page to review alarm event log and AI recommendations
 
-1. Run `streamlit run dashboard/app.py`. This starts the plant simulator (M1),
-   PLC controller (M2), data layer / historian (M3) and AI assistant (M5)
-   together, then opens the dashboard (M4).
-2. Press **Start line** and let the line reach normal operation (tank level
-   controlled, pasteurization temperature near 72 degC, bottles counting up).
-3. Inject each fault from the **Fault injection** menu:
-   - `1` Temperature sensor stuck -> `SENSOR_TEMP_STUCK`
-   - `2` Feed pump failure -> `PUMP_NO_FLOW`
-   - `3` Temperature excursion -> `TEMP_OUT_OF_RANGE`
-   - `4` Data link stale (MQTT) -> `DATA_STALE`
-4. Confirm the dashboard shows the alarm banner, the trend reacts, and the AI
-   assistant explains the fault and recommends safe operator actions.
-5. Press **Reset fault**, then **Start line** to recover, and **Export CSV** to
-   save evidence of the run.
-
-> Advanced: set `USE_MQTT=1` (with a Mosquitto broker on `localhost:1883`) to
-> route tags over real MQTT, and run `uvicorn backend.api:app` to expose the
-> same engine over REST/WebSocket.
+> Advanced: set `USE_MQTT=1` for real MQTT broker; run `uvicorn backend.api:app` for REST/WebSocket API.

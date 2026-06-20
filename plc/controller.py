@@ -180,22 +180,20 @@ class PLCController:
         man_conv   = "conveyor_cmd" in man
         man_fill   = "fill_valve_cmd" in man
 
-        # ── S1: Inlet Valve (proportional) ──────────────────────────
+        # ── S1: Inlet Valve (proportional, target=50%) ──────────────
         if man_inlet:
             inlet_valve_cmd = float(man["inlet_valve_cmd"])
         else:
-            # Proportionally controlled inlet valve centered on target=55%.
-            # Full open (100%) at or below TANK_LEVEL_LOW (30%),
-            # fully closed (0%) at or above TANK_LEVEL_HIGH (80%),
-            # linear interpolation in between.
+            # Proportionally controlled to hold tank at TANK_LEVEL_TARGET (50%).
+            # Full open at/below LOW (30%), fully closed at/above HIGH (80%).
             if tank_level <= config.TANK_LEVEL_LOW:
                 inlet_valve_cmd = 100.0
             elif tank_level >= config.TANK_LEVEL_HIGH:
                 inlet_valve_cmd = 0.0
             else:
-                # Scale linearly: at 30%→100% open, at 80%→0% open
-                band = config.TANK_LEVEL_HIGH - config.TANK_LEVEL_LOW
-                inlet_valve_cmd = 100.0 * (1.0 - (tank_level - config.TANK_LEVEL_LOW) / band)
+                # P-controller with gain=4: 50% open at target, 100% at 30%, 0% at 80%
+                error = tank_level - config.TANK_LEVEL_TARGET
+                inlet_valve_cmd = _clamp(50.0 - 5.0 * error, 0.0, 100.0)
 
         # ── S1: Feed Pump ───────────────────────────────────────────
         if man_pump:
@@ -208,19 +206,21 @@ class PLCController:
             if tank_level <= config.TANK_LEVEL_MIN_PUMP:
                 self.pump_cmd = 0.0  # dry-run protection
             else:
-                # Adaptation: if inlet valve is manual at a low value,
-                # reduce pump to match available inflow and avoid draining tank
                 if man_inlet:
                     manual_inflow = float(man["inlet_valve_cmd"])
-                    # Match pump roughly to manual inlet rate + tank buffer
-                    target_pump = manual_inflow * 1.2  # slightly faster than inlet
-                    target_pump = min(target_pump, 100.0)
+                    target_pump = min(manual_inflow * 1.2, 100.0)
                 else:
-                    target_pump = 100.0 if tank_level > config.TANK_LEVEL_LOW else 50.0
-                # Smooth adjustment
-                self.pump_cmd = _clamp(
-                    self.pump_cmd + 8.0 * (target_pump - self.pump_cmd) / 100.0 * 20.0,
-                    0.0, 100.0)
+                    # Pump speed proportional to tank level:
+                    # 50% at TARGET, up to 100% near HIGH, down to 30% near MIN
+                    if tank_level >= config.TANK_LEVEL_HIGH:
+                        target_pump = 100.0
+                    elif tank_level <= config.TANK_LEVEL_LOW:
+                        target_pump = 30.0
+                    else:
+                        frac = (tank_level - config.TANK_LEVEL_LOW) / (config.TANK_LEVEL_HIGH - config.TANK_LEVEL_LOW)
+                        target_pump = 30.0 + 70.0 * frac
+                self.pump_cmd += 8.0 * (target_pump - self.pump_cmd) / 100.0 * 20.0
+                self.pump_cmd = _clamp(self.pump_cmd, 0.0, 100.0)
             pump_cmd = self.pump_cmd
 
         # ── S2: Heater (PI with anti-windup) ──────────────────────
